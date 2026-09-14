@@ -2056,6 +2056,9 @@
           showToast("🟢 4G 短信棒已重新连接", "success");
         }
       } else {
+        // 彻底清零心跳时间，杜绝迟到轮询引发时序倒流
+        state.lastHeartbeatTime = 0;
+
         el.netBadge.className = "status-badge status-badge-action offline";
         el.netText.textContent = "设备已断开";
         el.netBadge.title = reason || `4G 短信棒已拔出或物理串口已断开 (点击可重试刷新)`;
@@ -2074,6 +2077,7 @@
         if (el.coreTemp) el.coreTemp.textContent = "-- ℃";
         if (el.vbatValue) el.vbatValue.textContent = "-- V";
         if (el.storageUptime) el.storageUptime.textContent = "-- / 0秒";
+        if (el.smsCount) el.smsCount.textContent = "-- / 100 条";
 
         const hwTitle = document.getElementById("hardwareStatusTitle");
         if (hwTitle) hwTitle.textContent = "🔌 设备已离线";
@@ -2087,6 +2091,7 @@
         el.toggleData.disabled = true;
         el.toggleRndis.disabled = true;
 
+        // 仅当此前确切在线时 (wasOnline === true)，才弹断开提示；初态为 null 时静默保持离线
         if (wasOnline === true) {
           showToast("🔴 4G 短信棒已断开连接", "error");
         }
@@ -2124,8 +2129,9 @@
       if (!data) return;
       state.status = data;
 
-      if (data.online === false) {
-        setDeviceOnlineState(false, "模组未响应或物理设备已拔出");
+      // 强类型在线判定：必须显式 online === true
+      if (data.online !== true) {
+        setDeviceOnlineState(false, data.error || "模组未响应或物理设备已拔出");
         return;
       }
 
@@ -2573,22 +2579,14 @@
     async function pollDeviceHeartbeat() {
       try {
         const st = await apiFetch("/api/status");
-        if (st && st.ok && st.online !== false && st.data && st.data.online !== false) {
+        if (st && st.ok && st.data && st.data.online === true) {
           state.lastHeartbeatTime = Date.now();
           renderStatus(st.data);
         } else {
-          const now = Date.now();
-          const timeoutMs = (state.offlineTimeoutSec || 5) * 1000;
-          if (!state.lastHeartbeatTime || (now - state.lastHeartbeatTime >= timeoutMs)) {
-            setDeviceOnlineState(false, (st && st.error) || "短信棒未插入或物理串口已拔出");
-          }
+          setDeviceOnlineState(false, (st && st.error) || (st && st.data && st.data.error) || "短信棒未插入或物理串口已拔出");
         }
       } catch (err) {
-        const now = Date.now();
-        const timeoutMs = (state.offlineTimeoutSec || 5) * 1000;
-        if (!state.lastHeartbeatTime || (now - state.lastHeartbeatTime >= timeoutMs)) {
-          setDeviceOnlineState(false, "网关通信超时");
-        }
+        setDeviceOnlineState(false, "网关通信超时");
       }
     }
 

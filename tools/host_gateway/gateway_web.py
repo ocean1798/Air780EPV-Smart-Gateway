@@ -95,7 +95,19 @@ class HubBackendClient:
         self.pending_lock = threading.Lock()
 
         # 本地状态与历史缓存
-        self.latest_status = {}
+        self.is_hardware_connected: bool = False
+        self.latest_status = {
+            "online": False,
+            "csq": 0,
+            "rsrp": 0,
+            "temp": 0,
+            "vbat": 0,
+            "sms_count": 0,
+            "uptime": 0,
+            "model": "Air780EPV",
+            "rndis": False,
+            "cellular_data": False
+        }
         self.recent_sms_events = []
         self.recent_calls = []
         self.cache_lock = threading.Lock()
@@ -438,12 +450,34 @@ class GatewayWebHandler(BaseHTTPRequestHandler):
 
         # 3. 获取实时全景状态看板
         if path == "/api/status":
-            resp = self.backend.execute_cmd("get_status", timeout=4.0)
-            if resp.get("ok"):
+            if not self.backend.is_hardware_connected:
+                # 物理串口未连接，直接 0ms 快速响应离线态，杜绝发送 RPC 导致超时挂起
+                self._send_json_resp(200, {
+                    "ok": False,
+                    "online": False,
+                    "error": "4G 短信棒未插入或物理串口已断开",
+                    "data": {
+                        "online": False,
+                        "csq": 0,
+                        "rsrp": 0,
+                        "temp": 0,
+                        "vbat": 0,
+                        "sms_count": 0,
+                        "uptime": 0,
+                        "model": "Air780EPV",
+                        "rndis": False,
+                        "cellular_data": False
+                    }
+                })
+                return
+
+            resp = self.backend.execute_cmd("get_status", timeout=2.0)
+            if resp.get("ok") and resp.get("online") is not False:
                 raw_data = resp.get("data", {})
                 rndis_val = raw_data.get("rndis") if "rndis" in raw_data else raw_data.get("rndis_enable", False)
                 data_val = raw_data.get("cellular_data") if "cellular_data" in raw_data else raw_data.get("cellular_data_enable", False)
                 norm_status = {
+                    "online": True,
                     "model": raw_data.get("bsp") or raw_data.get("model") or "Air780EPV",
                     "csq": raw_data.get("csq", 0),
                     "rsrp": raw_data.get("rsrp", 0),
@@ -458,16 +492,41 @@ class GatewayWebHandler(BaseHTTPRequestHandler):
                     "lua_mem_kb": raw_data.get("lua_mem_kb", 0),
                     "raw": raw_data
                 }
+                self.backend.is_hardware_connected = True
                 self.backend._update_status_cache(norm_status)
-                self._send_json_resp(200, {"ok": True, "data": norm_status})
+                self._send_json_resp(200, {"ok": True, "online": True, "data": norm_status})
             else:
-                # 若读取超时，回退提供内存缓存状态
+                self.backend.is_hardware_connected = False
                 with self.backend.cache_lock:
-                    fallback = dict(self.backend.latest_status)
-                if fallback:
-                    self._send_json_resp(200, {"ok": True, "data": fallback, "cached": True})
-                else:
-                    self._send_json_resp(503, {"ok": False, "error": resp.get("error", "模组未响应")})
+                    self.backend.latest_status = {
+                        "online": False,
+                        "csq": 0,
+                        "rsrp": 0,
+                        "temp": 0,
+                        "vbat": 0,
+                        "sms_count": 0,
+                        "uptime": 0,
+                        "model": "Air780EPV",
+                        "rndis": False,
+                        "cellular_data": False
+                    }
+                self._send_json_resp(200, {
+                    "ok": False,
+                    "online": False,
+                    "error": resp.get("error", "4G 短信棒未插入或物理串口已断开"),
+                    "data": {
+                        "online": False,
+                        "csq": 0,
+                        "rsrp": 0,
+                        "temp": 0,
+                        "vbat": 0,
+                        "sms_count": 0,
+                        "uptime": 0,
+                        "model": "Air780EPV",
+                        "rndis": False,
+                        "cellular_data": False
+                    }
+                })
             return
 
         # 4. 获取短信历史记录

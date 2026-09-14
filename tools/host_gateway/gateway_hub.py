@@ -451,9 +451,21 @@ class GatewayHub:
 
         self.ser: Optional[serial.Serial] = None
         self.serial_lock = threading.Lock()
+        self.serial_online: bool = False  # 物理串口真实通信在线状态
 
         # 状态与近期事件缓存
-        self.latest_status: Dict[str, Any] = {}
+        self.latest_status: Dict[str, Any] = {
+            "online": False,
+            "csq": 0,
+            "rsrp": 0,
+            "temp": 0,
+            "vbat": 0,
+            "sms_count": 0,
+            "uptime": 0,
+            "model": "Air780EPV",
+            "rndis": False,
+            "cellular_data": False
+        }
         self.latest_otp: Optional[Dict[str, Any]] = None
         self.recent_sms: List[Dict[str, Any]] = []
         self.board_cellular_data: bool = False  # 默认板端蜂窝数据关闭 (0流量保号态)
@@ -594,6 +606,7 @@ class GatewayHub:
                 log(f"检测到蜂窝串口漂移自愈: 原 {self.com} -> 现 {detected}")
                 self.com = detected
             elif not detected and not self.com:
+                self._mark_serial_disconnected("未检测到有效蜂窝虚拟串口")
                 return False
 
             target_port = self.com or detected
@@ -602,7 +615,7 @@ class GatewayHub:
                 self.ser.dtr = True
                 self.ser.rts = True
                 self.com = target_port
-                log(f"成功连接蜂窝串口: {self.com} @ {self.baud}")
+                log(f"成功打开蜂窝串口: {self.com} @ {self.baud} (等待首帧数据建立业务在线)")
                 return True
             except Exception as e:
                 # 若连接失败且当前指定端口已失效，尝试重新探测一次
@@ -618,7 +631,47 @@ class GatewayHub:
                     except Exception:
                         pass
                 self.ser = None
+                self._mark_serial_disconnected(f"打开串口失败: {e}")
                 return False
+
+    def _mark_serial_disconnected(self, reason: str = ""):
+        """物理串口断开或失效处理：清洗动态工况数据并向所有 IPC 客户端广播离线事件"""
+        if self.serial_online:
+            self.serial_online = False
+            log(f"物理串口已离线: {reason}，清洗工况缓存并广播断开事件")
+            with self.state_lock:
+                self.latest_status = {
+                    "online": False,
+                    "csq": 0,
+                    "rsrp": 0,
+                    "temp": 0,
+                    "vbat": 0,
+                    "sms_count": 0,
+                    "uptime": 0,
+                    "model": "Air780EPV",
+                    "rndis": False,
+                    "cellular_data": False
+                }
+            dis_evt = json.dumps({
+                "type": "event",
+                "event": "device_disconnected",
+                "data": {"online": False, "reason": reason}
+            }) + "\n"
+            self._broadcast(dis_evt)
+
+    def _mark_serial_connected(self):
+        """物理串口收到有效数据帧，正式确认业务在线并广播上线事件"""
+        if not self.serial_online:
+            self.serial_online = True
+            log(f"物理串口已成功建立双向通信: {self.com}，广播上线事件")
+            with self.state_lock:
+                self.latest_status["online"] = True
+            conn_evt = json.dumps({
+                "type": "event",
+                "event": "device_connected",
+                "data": {"online": True, "port": self.com}
+            }) + "\n"
+            self._broadcast(conn_evt)
 
     def _serial_loop(self):
         """物理串口读取循环，断线自动重连"""
@@ -647,6 +700,7 @@ class GatewayHub:
                 if line.startswith("{") and line.endswith("}"):
                     try:
                         obj = json.loads(line)
+                        self._mark_serial_connected()
                         self._process_incoming_frame(obj)
                     except Exception:
                         pass
@@ -656,6 +710,7 @@ class GatewayHub:
 
             except (serial.SerialException, OSError) as e:
                 log(f"物理串口发生瞬断异常: {e}，正在尝试自愈...")
+                self._mark_serial_disconnected(f"串口瞬断: {e}")
                 with self.serial_lock:
                     if self.ser:
                         try:
@@ -1095,14 +1150,30 @@ class GatewayHub:
                 pass
 
         with self.serial_lock:
-            if not self.ser or not self.ser.is_open:
-                log("串口未连接，下发指令失败")
+            if not self.ser or not self.ser.is_open or not self.serial_online:
+                log("串口未连接或处于离线态，执行 Fast-Fail 立即回送失败响应")
+                if line_clean.startswith("{") and line_clean.endswith("}"):
+                    try:
+                        cmd_obj = json.loads(line_clean)
+                        req_id = cmd_obj.get("id")
+                        if req_id:
+                            fail_resp = json.dumps({
+                                "type": "response",
+                                "id": req_id,
+                                "ok": False,
+                                "online": False,
+                                "error": "4G 短信棒未插入或物理串口已断开"
+                            }) + "\n"
+                            self._broadcast(fail_resp)
+                    except Exception:
+                        pass
                 return
             try:
                 self.ser.write((line_clean + "\r\n").encode("utf-8"))
                 self.ser.flush()
             except Exception as e:
                 log(f"写入物理串口失败: {e}，重置串口等待重连...")
+                self._mark_serial_disconnected(f"写入异常: {e}")
                 try:
                     if self.ser:
                         self.ser.close()
