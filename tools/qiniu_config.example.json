@@ -1,0 +1,7 @@
+{
+  "access_key": "YOUR_QINIU_ACCESS_KEY",
+  "secret_key": "YOUR_QINIU_SECRET_KEY",
+  "bucket_name": "your-fota-bucket-name",
+  "domain": "http://your-bucket-domain.clouddn.com",
+  "region": "z0"
+}

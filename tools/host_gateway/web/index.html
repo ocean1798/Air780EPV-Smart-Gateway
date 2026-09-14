@@ -1,0 +1,3298 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Air780EPV 智能蜂窝通信网关</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230f172a'/><rect x='6' y='20' width='3' height='6' rx='1' fill='%2338bdf8'/><rect x='11' y='16' width='3' height='10' rx='1' fill='%2338bdf8'/><rect x='16' y='12' width='3' height='14' rx='1' fill='%2338bdf8'/><rect x='21' y='8' width='3' height='18' rx='1' fill='%2338bdf8'/></svg>">
+  <style>
+    :root {
+      --bg-primary: #0a0e17;
+      --bg-surface: #111827;
+      --bg-card: #1f2937;
+      --bg-card-hover: #283548;
+      --border-color: #374151;
+      --border-focus: #3b82f6;
+      --text-primary: #f9fafb;
+      --text-secondary: #9ca3af;
+      --text-muted: #6b7280;
+      --accent-blue: #3b82f6;
+      --accent-cyan: #06b6d4;
+      --accent-green: #10b981;
+      --accent-amber: #f59e0b;
+      --accent-red: #ef4444;
+      --accent-purple: #8b5cf6;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      --radius-sm: 6px;
+      --radius-md: 10px;
+      --radius-lg: 16px;
+      --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.2);
+      --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.2);
+      --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.4), 0 4px 6px -2px rgba(0, 0, 0, 0.3);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html, body {
+      height: 100%;
+      max-height: 100vh;
+      overflow: hidden; /* 彻底消除页面级全局滚动条，全景一屏掌控 */
+    }
+
+    /* 全局滚动条极简美化：彻底消除 Windows 默认灰白色丑陋原生滚动条 */
+    ::-webkit-scrollbar, *::-webkit-scrollbar {
+      width: 5px;
+      height: 5px;
+    }
+    ::-webkit-scrollbar-track, *::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb, *::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.14);
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover, *::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.28);
+    }
+    ::-webkit-scrollbar-corner, *::-webkit-scrollbar-corner {
+      background: transparent;
+    }
+
+    /* 兼容 Firefox 现代细滚动条 */
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+    }
+
+    body {
+      background-color: var(--bg-primary);
+      color: var(--text-primary);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      line-height: 1.45;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* 顶部导航与状态栏 (紧凑高集成) */
+    header {
+      background-color: rgba(17, 24, 39, 0.85);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border-color);
+      flex-shrink: 0;
+      z-index: 50;
+      padding: 0.45rem 1.25rem;
+    }
+
+    .header-container {
+      max-width: 1440px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.85rem;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+    }
+
+    .brand-logo {
+      width: 32px;
+      height: 32px;
+      background: linear-gradient(135deg, var(--accent-cyan), var(--accent-blue));
+      border-radius: var(--radius-md);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-weight: 800;
+      font-size: 0.95rem;
+      box-shadow: 0 0 12px rgba(6, 182, 212, 0.35);
+    }
+
+    .brand-title {
+      font-size: 1.05rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      background: linear-gradient(to right, #fff, var(--text-secondary));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .brand-subtitle {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+    }
+
+    .header-status-group {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.2rem 0.65rem;
+      border-radius: 9999px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      background-color: rgba(16, 185, 129, 0.12);
+      color: var(--accent-green);
+      border: 1px solid rgba(16, 185, 129, 0.25);
+    }
+
+    .status-badge.offline {
+      background-color: rgba(239, 68, 68, 0.12);
+      color: var(--accent-red);
+      border-color: rgba(239, 68, 68, 0.25);
+    }
+
+    .status-badge.connecting {
+      background-color: rgba(245, 158, 11, 0.12);
+      color: var(--accent-amber);
+      border-color: rgba(245, 158, 11, 0.25);
+    }
+
+    .pulse-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background-color: currentColor;
+      box-shadow: 0 0 6px currentColor;
+      animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.85); }
+    }
+
+    /* 主布局 (自适应充满，绝无全局滚动) */
+    main {
+      flex: 1;
+      min-height: 0;
+      max-width: 1440px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 0.65rem 1.25rem 0.85rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+      overflow: hidden;
+    }
+
+    /* ==========================================================================
+       顶栏中央：最新验证码快捷交互徽章 (Top OTP Pill)
+       ========================================================================== */
+    .header-center-otp {
+      flex: 1;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-width: 0;
+      padding: 0 0.5rem;
+    }
+
+    .top-otp-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.55rem;
+      background: linear-gradient(135deg, rgba(15, 23, 42, 0.85), rgba(30, 41, 59, 0.75));
+      border: 1px solid rgba(6, 182, 212, 0.35);
+      border-radius: 9999px;
+      padding: 0.22rem 0.55rem 0.22rem 0.75rem;
+      box-shadow: 0 0 16px rgba(6, 182, 212, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+      outline: none;
+      max-width: 100%;
+    }
+
+    .top-otp-pill:hover {
+      background: linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(30, 41, 59, 0.9));
+      border-color: rgba(6, 182, 212, 0.65);
+      box-shadow: 0 0 20px rgba(6, 182, 212, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+      transform: translateY(-1px);
+    }
+
+    .top-otp-pill:active {
+      transform: translateY(0) scale(0.98);
+    }
+
+    .top-otp-pill.empty {
+      opacity: 0.65;
+      border-style: dashed;
+      border-color: rgba(255, 255, 255, 0.18);
+      background: rgba(15, 23, 42, 0.45);
+      box-shadow: none;
+      cursor: default;
+    }
+    .top-otp-pill.empty:hover {
+      transform: none;
+      border-color: rgba(255, 255, 255, 0.25);
+      box-shadow: none;
+    }
+    .top-otp-pill.empty .top-otp-copy-btn {
+      display: none;
+    }
+    .top-otp-pill.empty .top-otp-code {
+      color: var(--text-muted);
+      text-shadow: none;
+    }
+
+    .top-otp-icon {
+      font-size: 0.9rem;
+      line-height: 1;
+      filter: drop-shadow(0 0 4px rgba(251, 191, 36, 0.4));
+      flex-shrink: 0;
+    }
+
+    .top-otp-body {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      white-space: nowrap;
+    }
+
+    .top-otp-label {
+      font-size: 0.72rem;
+      color: var(--text-secondary);
+      font-weight: 500;
+      letter-spacing: -0.01em;
+    }
+
+    .top-otp-code {
+      font-family: var(--font-mono);
+      font-size: 1.05rem;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      color: #38bdf8;
+      text-shadow: 0 0 10px rgba(56, 189, 248, 0.5);
+      line-height: 1;
+    }
+
+    .top-otp-copy-btn {
+      background: rgba(6, 182, 212, 0.15);
+      border: 1px solid rgba(6, 182, 212, 0.35);
+      color: var(--accent-cyan);
+      border-radius: 9999px;
+      padding: 0.15rem 0.5rem;
+      font-size: 0.68rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      transition: all 0.2s ease;
+      line-height: 1.2;
+    }
+
+    .top-otp-pill:hover .top-otp-copy-btn {
+      background: rgba(6, 182, 212, 0.28);
+      border-color: rgba(6, 182, 212, 0.6);
+      color: #fff;
+    }
+
+    .top-otp-copy-btn.copied {
+      background: rgba(16, 185, 129, 0.22) !important;
+      border-color: rgba(16, 185, 129, 0.55) !important;
+      color: #34d399 !important;
+    }
+
+    @keyframes otpPulse {
+      0% { transform: scale(0.96); box-shadow: 0 0 0 0 rgba(6, 182, 212, 0.6); }
+      50% { transform: scale(1.02); box-shadow: 0 0 25px 4px rgba(6, 182, 212, 0.45); }
+      100% { transform: scale(1); box-shadow: 0 0 16px rgba(6, 182, 212, 0.12); }
+    }
+
+    .top-otp-pill.pulse-anim {
+      animation: otpPulse 0.8s ease-out;
+    }
+
+    /* 网格系统 (充满视口) */
+    .dashboard-grid {
+      flex: 1;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      gap: 0.75rem;
+      height: 100%;
+      overflow: hidden;
+    }
+
+    /* ==========================================================================
+       响应式系统 (Responsive Layout System)
+       - 桌面宽屏 (>= 861px): 保持“一屏掌控”，100vh 锁死，双列布局，无全局滚动条
+       - 移动端/窄窗口 (<= 860px): 页面级垂直流式排版，自然纵向滑动，自适应尺寸
+       ========================================================================== */
+
+    @media (max-width: 860px) {
+      html, body {
+        height: auto !important;
+        min-height: 100% !important;
+        max-height: none !important;
+        overflow-x: hidden !important;
+        overflow-y: auto !important;
+      }
+
+      body {
+        display: block !important;
+      }
+
+      header {
+        position: sticky;
+        top: 0;
+        z-index: 60;
+      }
+
+      main {
+        height: auto !important;
+        min-height: auto !important;
+        max-height: none !important;
+        overflow: visible !important;
+        padding: 0.65rem 0.75rem 2rem !important;
+      }
+
+      .dashboard-grid {
+        display: flex !important;
+        flex-direction: column !important;
+        height: auto !important;
+        min-height: auto !important;
+        overflow: visible !important;
+        gap: 0.75rem !important;
+      }
+
+      .aside-column {
+        height: auto !important;
+        min-height: auto !important;
+        overflow: visible !important;
+        padding-right: 0 !important;
+        gap: 0.75rem !important;
+      }
+
+      .aside-column .card {
+        flex: none !important;
+      }
+
+      #callList {
+        min-height: 70px;
+        max-height: 220px;
+      }
+
+      section.card {
+        height: auto !important;
+        min-height: 520px !important;
+      }
+
+      .sms-list {
+        max-height: 480px !important;
+        min-height: 240px !important;
+        overflow-y: auto !important;
+      }
+    }
+
+    @media (max-width: 720px) {
+      header {
+        padding: 0.45rem 0.75rem;
+      }
+
+      .header-container {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        grid-template-areas:
+          "brand status"
+          "top-otp top-otp"
+          "actions actions";
+        gap: 0.45rem;
+        align-items: center;
+      }
+
+      .brand {
+        grid-area: brand;
+        min-width: 0;
+      }
+
+      .brand-title {
+        font-size: 0.95rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .brand-subtitle {
+        font-size: 0.68rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .header-status-group {
+        display: contents;
+      }
+
+      .status-badge {
+        grid-area: status;
+        justify-self: end;
+        white-space: nowrap;
+        flex-shrink: 0;
+      }
+
+      .header-center-otp {
+        grid-area: top-otp;
+        width: 100%;
+        display: flex;
+        justify-content: stretch;
+        padding: 0;
+      }
+
+      .top-otp-pill {
+        width: 100%;
+        justify-content: space-between;
+        padding: 0.32rem 0.75rem;
+        border-radius: var(--radius-md);
+      }
+
+      .top-otp-body {
+        gap: 0.6rem;
+      }
+
+      .top-otp-code {
+        font-size: 1.15rem;
+      }
+
+      .top-otp-copy-btn {
+        padding: 0.2rem 0.65rem;
+        font-size: 0.72rem;
+      }
+
+      .header-actions {
+        grid-area: actions;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.45rem;
+        width: 100%;
+      }
+
+      .header-actions .btn {
+        width: 100%;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .header-actions .btn {
+        padding: 0.3rem 0.2rem;
+        font-size: 0.72rem;
+        white-space: nowrap;
+      }
+      .brand-subtitle {
+        display: none; /* 超窄屏隐藏副标题，保证顶栏清爽通透 */
+      }
+
+      .brand-title {
+        font-size: 0.95rem;
+      }
+
+      .status-badge {
+        font-size: 0.68rem;
+        padding: 0.15rem 0.45rem;
+        max-width: 115px;
+      }
+
+      .status-badge span:last-child {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .top-otp-pill {
+        padding: 0.28rem 0.55rem;
+      }
+      .top-otp-label {
+        font-size: 0.68rem;
+      }
+      .top-otp-code {
+        font-size: 1.05rem;
+      }
+      .top-otp-copy-btn {
+        padding: 0.15rem 0.45rem;
+        font-size: 0.68rem;
+      }
+
+      /* 移动端短信头部自适应避免拥挤 */
+      .sms-meta {
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 0.25rem;
+      }
+
+      /* 仅在带有操作工具栏的卡片表头在移动端纵向排列 */
+      .card-header {
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .card-header:has(.workspace-toolbar) {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0.45rem;
+      }
+
+      .card-title {
+        font-size: 0.88rem;
+      }
+
+      .workspace-toolbar {
+        display: grid !important;
+        grid-template-columns: 1.1fr 1.1fr 0.9fr;
+        gap: 0.35rem;
+        width: 100%;
+      }
+
+      .search-input {
+        grid-column: 1 / -1;
+        width: 100%;
+        min-width: 0;
+      }
+
+      .workspace-toolbar .btn {
+        width: 100%;
+        padding: 0.35rem 0.35rem;
+        font-size: 0.75rem;
+        white-space: nowrap;
+        justify-content: center;
+      }
+
+      /* 底部统计栏 */
+      .card-footer {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.25rem;
+        font-size: 0.7rem;
+      }
+
+      /* 抽屉与模态框 */
+      .drawer-content {
+        max-width: 100%;
+        width: 100%;
+      }
+
+      .modal-content {
+        max-width: calc(100% - 1rem);
+        width: 100%;
+      }
+    }
+
+    /* 左侧控制栏容器 */
+    .aside-column {
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+      overflow-y: auto;
+      min-height: 0;
+      padding-right: 0.25rem;
+    }
+    .aside-column::-webkit-scrollbar {
+      width: 4px;
+    }
+    .aside-column::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 2px;
+    }
+
+    /* 卡片公共样式 */
+    .card {
+      background-color: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      box-shadow: var(--shadow-sm);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .card-header {
+      padding: 0.55rem 0.85rem;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background-color: rgba(255, 255, 255, 0.02);
+      flex-shrink: 0;
+    }
+
+    .card-title {
+      font-size: 0.88rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+    }
+
+    .card-body {
+      padding: 0.65rem 0.85rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+    }
+
+    /* 侧边仪表栏指标项 (紧凑 2x2) */
+    .metric-group {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.5rem;
+    }
+
+    .metric-card {
+      background-color: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      padding: 0.45rem 0.6rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.15rem;
+    }
+
+    .metric-card.clickable {
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.2s ease;
+    }
+
+    .metric-card.clickable:hover {
+      border-color: rgba(6, 182, 212, 0.45);
+      background-color: var(--bg-card-hover);
+    }
+
+    .metric-card.clickable:active {
+      transform: scale(0.98);
+    }
+
+    .metric-label {
+      font-size: 0.7rem;
+      color: var(--text-secondary);
+    }
+
+    .metric-value {
+      font-size: 1.05rem;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      color: var(--text-primary);
+    }
+
+    .metric-value.highlight {
+      color: var(--accent-cyan);
+    }
+
+    .signal-bars {
+      display: inline-flex;
+      align-items: flex-end;
+      gap: 2.5px;
+      height: 14px;
+      margin-left: 0.3rem;
+    }
+
+    .signal-bar {
+      width: 2.5px;
+      background-color: var(--border-color);
+      border-radius: 1px;
+    }
+
+    .signal-bar:nth-child(1) { height: 3px; }
+    .signal-bar:nth-child(2) { height: 6px; }
+    .signal-bar:nth-child(3) { height: 9px; }
+    .signal-bar:nth-child(4) { height: 12px; }
+    .signal-bar:nth-child(5) { height: 14px; }
+
+    .signal-bar.active {
+      background-color: var(--accent-green);
+      box-shadow: 0 0 5px rgba(16, 185, 129, 0.4);
+    }
+
+    /* 控制面板切换开关 */
+    .control-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.5rem 0.75rem;
+      background-color: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      transition: all 0.25s ease;
+    }
+
+    .control-row.disabled {
+      opacity: 0.38;
+      cursor: not-allowed;
+      filter: grayscale(0.8);
+      background-color: rgba(255, 255, 255, 0.015);
+    }
+
+    .control-row.disabled label.switch {
+      pointer-events: none;
+      cursor: not-allowed;
+    }
+
+    .control-meta {
+      display: flex;
+      flex-direction: column;
+      gap: 0.1rem;
+    }
+
+    .control-name {
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .control-desc {
+      font-size: 0.68rem;
+      color: var(--text-muted);
+    }
+
+    /* 来电记录独立卡片与条目样式 */
+    .call-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.45rem 0.65rem;
+      background-color: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      transition: background-color 0.2s;
+    }
+
+    .call-item:hover {
+      background-color: var(--bg-card-hover);
+    }
+
+    /* 现代开关 Toggle */
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 44px;
+      height: 24px;
+      flex-shrink: 0;
+    }
+
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: #374151;
+      transition: .3s cubic-bezier(0.4, 0, 0.2, 1);
+      border-radius: 24px;
+    }
+
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 18px;
+      width: 18px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: .3s cubic-bezier(0.4, 0, 0.2, 1);
+      border-radius: 50%;
+    }
+
+    input:checked + .slider {
+      background-color: var(--accent-blue);
+    }
+
+    input:checked + .slider:before {
+      transform: translateX(20px);
+    }
+
+    /* 按钮组 */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.4rem;
+      padding: 0.5rem 1rem;
+      font-size: 0.85rem;
+      font-weight: 600;
+      border-radius: var(--radius-md);
+      border: 1px solid transparent;
+      cursor: pointer;
+      transition: all 0.2s;
+      outline: none;
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .btn-primary {
+      background-color: var(--accent-blue);
+      color: white;
+    }
+    .btn-primary:hover:not(:disabled) {
+      background-color: #2563eb;
+    }
+
+    .btn-secondary {
+      background-color: var(--bg-card);
+      border-color: var(--border-color);
+      color: var(--text-primary);
+    }
+    .btn-secondary:hover:not(:disabled) {
+      background-color: var(--bg-card-hover);
+    }
+
+    .btn-danger {
+      background-color: rgba(239, 68, 68, 0.15);
+      border-color: rgba(239, 68, 68, 0.3);
+      color: #f87171;
+    }
+    .btn-danger:hover:not(:disabled) {
+      background-color: rgba(239, 68, 68, 0.25);
+    }
+
+    .btn-sm {
+      padding: 0.3rem 0.65rem;
+      font-size: 0.75rem;
+    }
+
+    .btn-group-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+    }
+
+    /* 短信工作台主卡片 */
+    .workspace-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+
+    .search-input {
+      flex: 1;
+      min-width: 180px;
+      padding: 0.35rem 0.65rem;
+      background-color: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      color: var(--text-primary);
+      font-size: 0.8rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .search-input:focus {
+      border-color: var(--border-focus);
+    }
+
+    .sms-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.55rem;
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      padding-right: 0.35rem;
+    }
+
+    .sms-list::-webkit-scrollbar {
+      width: 5px;
+    }
+    .sms-list::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .sms-list::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.12);
+      border-radius: 3px;
+    }
+
+    .sms-item {
+      background-color: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      padding: 0.52rem 0.8rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.28rem;
+      transition: transform 0.15s, border-color 0.15s;
+      flex-shrink: 0;
+    }
+
+    .sms-item:hover {
+      border-color: #4b5563;
+      transform: translateY(-1px);
+    }
+
+    .sms-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.78rem;
+      gap: 0.4rem 0.6rem;
+      flex-wrap: wrap;
+    }
+
+    .sms-sender {
+      font-weight: 700;
+      color: #93c5fd;
+      font-family: var(--font-mono);
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+
+    .sms-meta {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-left: auto;
+    }
+
+    .sms-tag {
+      font-size: 0.68rem;
+      padding: 0.08rem 0.32rem;
+      border-radius: var(--radius-sm);
+      background-color: rgba(59, 130, 246, 0.15);
+      color: var(--accent-blue);
+      font-weight: 500;
+      white-space: nowrap;
+    }
+
+    .sms-time {
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      white-space: nowrap;
+    }
+
+    .sms-content {
+      font-size: 0.84rem;
+      color: #e5e7eb;
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.35;
+    }
+
+    .otp-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      background-color: rgba(6, 182, 212, 0.15);
+      border: 1px solid rgba(6, 182, 212, 0.35);
+      padding: 0.1rem 0.45rem;
+      border-radius: var(--radius-sm);
+      font-size: 0.72rem;
+      font-family: var(--font-sans);
+      font-weight: 600;
+      color: var(--accent-cyan);
+      cursor: pointer;
+      transition: all 0.2s;
+      white-space: nowrap;
+      line-height: 1.25;
+    }
+
+    .otp-pill strong {
+      font-family: var(--font-mono);
+      font-weight: 700;
+      letter-spacing: 0.5px;
+    }
+
+    .otp-pill:hover {
+      background-color: rgba(6, 182, 212, 0.28);
+      border-color: rgba(6, 182, 212, 0.6);
+      transform: scale(1.02);
+    }
+
+    .card-footer {
+      padding: 0.4rem 0.85rem;
+      border-top: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      background-color: rgba(255, 255, 255, 0.015);
+      flex-shrink: 0;
+    }
+
+    .empty-state {
+      padding: 3rem 1rem;
+      text-align: center;
+      color: var(--text-muted);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    /* 模态弹窗 (主动发信) */
+    .modal-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background-color: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(4px);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+
+    .modal-backdrop.active {
+      display: flex;
+    }
+
+    .modal-content {
+      background-color: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-lg);
+      width: 100%;
+      max-width: 480px;
+      box-shadow: var(--shadow-lg);
+      animation: modalPop 0.2s ease-out;
+    }
+
+    @keyframes modalPop {
+      from { opacity: 0; transform: scale(0.95); }
+      to { opacity: 1; transform: scale(1); }
+    }
+
+    .modal-header {
+      padding: 1rem 1.25rem;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .modal-body {
+      padding: 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .modal-footer {
+      padding: 0.75rem 1.25rem;
+      border-top: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 0.75rem;
+      background-color: rgba(255, 255, 255, 0.02);
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+
+    .form-label {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+    }
+
+    .form-input, .form-textarea {
+      padding: 0.6rem 0.85rem;
+      background-color: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      color: var(--text-primary);
+      font-size: 0.85rem;
+      font-family: inherit;
+      outline: none;
+    }
+
+    .form-input:focus, .form-textarea:focus {
+      border-color: var(--border-focus);
+    }
+
+    .form-textarea {
+      resize: vertical;
+      min-height: 90px;
+    }
+
+    /* 主动代发短信控件 (位于左下角控制面板) */
+    .action-card-btn {
+      background-color: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      padding: 0.55rem 0.75rem;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .action-card-btn:hover {
+      border-color: var(--accent-blue);
+      background-color: rgba(59, 130, 246, 0.06);
+    }
+
+    .action-card-btn:active {
+      transform: translateY(1px);
+    }
+
+    .action-card-btn.disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      pointer-events: none;
+      filter: grayscale(0.8);
+    }
+
+    .refresh-icon {
+      display: inline-block;
+      transition: transform 0.2s ease;
+    }
+
+    .refresh-icon.spinning {
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
+    .status-badge.status-badge-action {
+      cursor: pointer;
+      user-select: none;
+      transition: all var(--transition-fast);
+      gap: 0.45rem;
+      padding: 0.22rem 0.65rem 0.22rem 0.75rem;
+    }
+
+    .status-badge.status-badge-action:hover {
+      filter: brightness(1.18);
+      border-color: currentColor;
+      box-shadow: 0 0 10px rgba(16, 185, 129, 0.28);
+    }
+
+    .status-badge.status-badge-action.offline:hover {
+      box-shadow: 0 0 10px rgba(239, 68, 68, 0.28);
+    }
+
+    .status-badge.status-badge-action:active {
+      transform: scale(0.97);
+    }
+
+    .badge-refresh-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: none;
+      padding: 0;
+      margin: 0;
+      color: inherit;
+      cursor: pointer;
+      opacity: 0.8;
+      transition: opacity var(--transition-fast);
+      font-size: 0.75rem;
+      line-height: 1;
+    }
+
+    .status-badge.status-badge-action:hover .badge-refresh-btn {
+      opacity: 1;
+    }
+
+    /* 短信收件箱懒加载样式 */
+    .sms-load-more {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.4rem;
+      padding: 0.6rem 0.8rem;
+      margin-top: 0.5rem;
+      border-radius: var(--radius-md);
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px dashed rgba(255, 255, 255, 0.08);
+      user-select: none;
+      transition: all var(--transition-fast);
+    }
+
+    .sms-load-more-btn {
+      cursor: pointer;
+      color: var(--accent-blue);
+      border-color: rgba(56, 189, 248, 0.3);
+      background: rgba(56, 189, 248, 0.05);
+    }
+
+    .sms-load-more-btn:hover {
+      background: rgba(56, 189, 248, 0.12);
+      border-color: rgba(56, 189, 248, 0.5);
+      color: #7dd3fc;
+      transform: translateY(-1px);
+    }
+
+    .sms-load-more-btn:active {
+      transform: translateY(0);
+    }
+
+    .sms-loaded-all {
+      border-style: solid;
+      border-color: transparent;
+      color: var(--text-muted);
+      opacity: 0.7;
+    }
+
+    @media (min-width: 721px) {
+      .header-actions {
+        display: contents;
+      }
+      .status-badge {
+        order: 1;
+      }
+      #btnRebootGateway {
+        order: 2;
+      }
+      #btnOpenConfigDrawer {
+        order: 3;
+      }
+    }
+
+    /* 悬浮轻提示 Toast */
+    .toast-container {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 200;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      pointer-events: none;
+    }
+
+    .toast {
+      background-color: var(--bg-card);
+      color: var(--text-primary);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      padding: 0.75rem 1.15rem;
+      font-size: 0.85rem;
+      font-weight: 500;
+      box-shadow: var(--shadow-lg);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      animation: toastIn 0.25s ease-out;
+      pointer-events: auto;
+    }
+
+    .toast.success {
+      border-left: 4px solid var(--accent-green);
+    }
+
+    .toast.error {
+      border-left: 4px solid var(--accent-red);
+    }
+
+    /* 抽屉导航 Drawer (Webhook 配置) */
+    .drawer-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background-color: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(4px);
+      z-index: 150;
+      justify-content: flex-end;
+    }
+
+    .drawer-backdrop.active {
+      display: flex;
+    }
+
+    .drawer-content {
+      background-color: var(--bg-surface);
+      border-left: 1px solid var(--border-color);
+      width: 100%;
+      max-width: 580px;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      box-shadow: var(--shadow-lg);
+      animation: drawerSlideIn 0.25s ease-out;
+    }
+
+    @keyframes drawerSlideIn {
+      from { transform: translateX(100%); }
+      to { transform: translateX(0); }
+    }
+
+    .drawer-header {
+      padding: 1.25rem 1.5rem;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background-color: rgba(255, 255, 255, 0.02);
+    }
+
+    .drawer-body {
+      padding: 1.25rem 1.5rem;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+      flex: 1;
+    }
+
+    .drawer-footer {
+      padding: 1rem 1.5rem;
+      border-top: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 0.75rem;
+      background-color: rgba(255, 255, 255, 0.02);
+    }
+
+    .channel-card {
+      background-color: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      transition: all 0.2s;
+    }
+
+    .channel-card:focus-within {
+      border-color: var(--border-focus);
+    }
+
+    .channel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .channel-title {
+      font-size: 0.9rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .channel-test-group {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: 0.25rem;
+    }
+
+    .test-feedback {
+      font-size: 0.75rem;
+      padding: 0.25rem 0.6rem;
+      border-radius: 4px;
+      font-family: var(--font-mono);
+      display: none;
+    }
+
+    .test-feedback.show {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+
+    .test-feedback.success {
+      background-color: rgba(16, 185, 129, 0.15);
+      color: var(--accent-green);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+
+    .test-feedback.error {
+      background-color: rgba(239, 68, 68, 0.15);
+      color: var(--accent-red);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+
+    .test-feedback.loading {
+      background-color: rgba(6, 182, 212, 0.15);
+      color: var(--accent-cyan);
+      border: 1px solid rgba(6, 182, 212, 0.3);
+    }
+
+    @keyframes toastIn {
+      from { opacity: 0; transform: translateY(12px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    
+  </style>
+</head>
+<body>
+
+  <!-- 顶部状态栏 -->
+  <header>
+    <div class="header-container">
+      <div class="brand">
+        <div class="brand-logo">4G</div>
+        <div>
+          <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <div class="brand-title">4G 智能短信棒</div>
+            <span class="status-badge" id="firmwareVersionBadge" style="font-size: 0.68rem; padding: 0.1rem 0.45rem; background: rgba(56, 189, 248, 0.15); color: #38bdf8; border-color: rgba(56, 189, 248, 0.3);">v1.2.5</span>
+          </div>
+          <div class="brand-subtitle" id="boardModel">🟢 免流量保护中 · 本地宽带代推已启用</div>
+        </div>
+      </div>
+      <!-- 顶栏中央：最新验证码快捷交互徽章 (桌面端居中，移动端通栏自适应) -->
+      <div class="header-center-otp" id="headerOtpContainer">
+        <div class="top-otp-pill empty" id="topOtpPill" role="button" tabindex="0" title="等待接收包含验证码的短信...">
+          <span class="top-otp-icon">🔑</span>
+          <div class="top-otp-body">
+            <span class="top-otp-label" id="topOtpLabel">最新验证码</span>
+            <span class="top-otp-code" id="topOtpCode">--</span>
+          </div>
+          <button class="top-otp-copy-btn" id="btnTopOtpCopy" title="点击一键复制" aria-label="复制验证码">
+            <span id="topOtpCopyIcon">📋</span>
+            <span id="topOtpCopyText">复制</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="header-status-group">
+        <div class="status-badge status-badge-action" id="netStatusBadge" role="button" tabindex="0" title="点击立即刷新短信棒状态与数据">
+          <span class="pulse-dot"></span>
+          <span id="netStatusText">设备连接中...</span>
+          <button class="badge-refresh-btn" id="btnManualRefresh" title="点击立即刷新网关数据" aria-label="立即刷新">
+            <span class="refresh-icon" id="manualRefreshIcon">🔄</span>
+          </button>
+        </div>
+        <div class="header-actions">
+          <button class="btn btn-secondary btn-sm" id="btnRebootGateway" title="安全重启短信棒设备">
+            ⚡ 重启设备
+          </button>
+          <button class="btn btn-secondary btn-sm" id="btnOpenConfigDrawer" title="系统设置与消息推送渠道配置（通知/FOTA/离线判定/系统交互）">
+            ⚙️ 系统设置
+          </button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- 主仪表网格 (已按需求移除顶部最新验证码横幅) -->
+    <div class="dashboard-grid">
+
+      <!-- 左侧：硬件状态与控制面板 (紧凑高密度) -->
+      <aside class="aside-column">
+        
+        <!-- 移动网络与卡状态卡片 -->
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">📶 网络与卡信息</span>
+            <span class="status-badge" id="csqBadge">4G 信号良好</span>
+          </div>
+          <div class="card-body">
+            <div class="metric-group">
+              <div class="metric-card">
+                <span class="metric-label">移动网络信号</span>
+                <div style="display: flex; align-items: baseline;">
+                  <span class="metric-value highlight" id="signalValue" style="font-size: 0.95rem;">良好 (4G)</span>
+                  <div class="signal-bars" id="signalBars">
+                    <span class="signal-bar"></span>
+                    <span class="signal-bar"></span>
+                    <span class="signal-bar"></span>
+                    <span class="signal-bar"></span>
+                    <span class="signal-bar"></span>
+                  </div>
+                </div>
+              </div>
+              <div class="metric-card clickable" id="cardSimPhone">
+                <span class="metric-label">本机手机卡号</span>
+                <span class="metric-value" id="simPhoneVal" style="font-size: 0.95rem; font-family: var(--font-mono); color: var(--accent-cyan); white-space: nowrap;">
+                  132 4383 2515
+                </span>
+              </div>
+              <div class="metric-card">
+                <span class="metric-label">已存短信</span>
+                <span class="metric-value" id="storageSmsDisplay" style="font-size: 0.95rem;">19 / 100 条</span>
+              </div>
+              <div class="metric-card">
+                <span class="metric-label">连续运行时间</span>
+                <span class="metric-value" id="uptimeDisplay" style="font-size: 0.88rem;">-- 分钟</span>
+              </div>
+            </div>
+
+            <div style="margin-top: 0.15rem; padding: 0.35rem 0.65rem; background: rgba(255,255,255,0.02); border-radius: var(--radius-sm); border: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; font-size: 0.72rem; color: var(--text-muted);">
+              <span id="hardwareStatusTitle">🛡️ 设备工况正常</span>
+              <span id="hardwareDiagnosticText" style="font-family: var(--font-mono);">核心 39.0℃ · 供电 4.00V</span>
+            </div>
+            <!-- 隐藏的兼容占位，避免旧脚本报错 -->
+            <span id="netMode" style="display: none;">LTE 4G</span>
+            <span id="coreTemp" style="display: none;">-- ℃</span>
+            <span id="vbatValue" style="display: none;">-- V</span>
+            <span id="storageUptime" style="display: none;">--</span>
+          </div>
+        </div>
+
+        <!-- 常用功能与开关 -->
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">⚙️ 常用功能与开关</span>
+          </div>
+          <div class="card-body" style="gap: 0.5rem;">
+            <!-- 1. 蜂窝移动数据（底层数据基石） -->
+            <div class="control-row" id="cellularDataRow">
+              <div class="control-meta">
+                <span class="control-name">蜂窝移动数据</span>
+                <span class="control-desc">设备自身的 4G 移动网络；日常关闭即可 0 流量免话费收发短信</span>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="toggleCellularData">
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <!-- 2. USB 网络共享（依赖蜂窝移动数据开启） -->
+            <div class="control-row" id="rndisRow">
+              <div class="control-meta">
+                <div style="display: flex; align-items: center; gap: 0.4rem;">
+                  <span class="control-name">USB 网络共享</span>
+                  <span class="status-badge" id="rndisLockBadge" style="font-size: 0.68rem; padding: 0.05rem 0.35rem; display: none; background: rgba(255,255,255,0.06); color: var(--text-muted);">需开启移动数据</span>
+                </div>
+                <span class="control-desc">将 4G 流量共享给电脑，允许电脑通过插棒直接上网</span>
+              </div>
+              <label class="switch" id="toggleRndisSwitchLabel">
+                <input type="checkbox" id="toggleRndis">
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <!-- 发送短信入口 -->
+            <div class="action-card-btn" id="btnOpenSendModal" title="打开短信编辑发送窗口">
+              <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <span style="font-size: 0.95rem;">✉️</span>
+                <div>
+                  <div style="font-size: 0.83rem; font-weight: 600; color: var(--text-primary); line-height: 1.2;">发送短信</div>
+                  <div style="font-size: 0.7rem; color: var(--text-muted); line-height: 1.2; margin-top: 2px;">使用插棒内的手机号向外发短信</div>
+                </div>
+              </div>
+              <button class="btn btn-primary btn-sm" style="pointer-events: none; padding: 0.25rem 0.65rem; font-size: 0.76rem;">
+                发短信 ↗
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3. 来电记录卡片 (垂直延伸到底部，平齐对齐右侧工作台) -->
+        <div class="card" style="flex: 1; min-height: 0; display: flex; flex-direction: column;">
+          <div class="card-header">
+            <span class="card-title">📞 来电记录</span>
+            <span class="status-badge" id="callCountText">0 条</span>
+          </div>
+          <div class="card-body" style="flex: 1; min-height: 0; padding: 0.65rem 0.85rem; overflow: hidden; display: flex; flex-direction: column;">
+            <div id="callList" style="flex: 1; min-height: 0; overflow-y: hidden; display: flex; flex-direction: column; gap: 0.45rem; padding-right: 0.25rem;">
+              <div class="empty-state" style="flex: 1; min-height: 50px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.35rem; color: var(--text-muted); padding: 0.5rem 0;">
+                <span style="font-size: 1.35rem;">📞</span>
+                <span style="font-size: 0.78rem;">暂无来电记录</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </aside>
+
+      <!-- 右侧：短信收件箱 -->
+      <section class="card" style="height: 100%; display: flex; flex-direction: column; min-height: 0;">
+        <div class="card-header">
+          <span class="card-title">💬 短信收件箱</span>
+          <div class="workspace-toolbar">
+            <input type="text" class="search-input" id="searchSms" placeholder="搜索发件人号码或短信内容...">
+            <button class="btn btn-secondary btn-sm" id="btnToggleSort" title="切换时间排序（当前：最新优先）">
+              <span id="sortIcon">⬇️</span> <span id="sortText">最新优先</span>
+            </button>
+            <button class="btn btn-danger btn-sm" id="btnClearHistory" title="清空已保存的短信记录">🗑️ 清空记录</button>
+            <button class="btn btn-secondary btn-sm" id="btnRefreshHistory">🔄 刷新</button>
+          </div>
+        </div>
+        <div class="card-body" style="flex: 1; min-height: 0; padding: 0.65rem 0.85rem; display: flex; flex-direction: column; overflow: hidden;">
+          <div class="sms-list" id="smsContainer">
+            <div class="empty-state">
+              <span>正在拉取短信记录...</span>
+            </div>
+          </div>
+        </div>
+        <!-- 底部数据统计与操作状态底脚 -->
+        <div class="card-footer">
+          <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <span id="smsStatCount">显示 0 条短信</span>
+            <span>·</span>
+            <span style="color: var(--text-muted);">已在设备本地加密保存</span>
+          </div>
+          <div>点击短信右上角验证码即可一键复制</div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <!-- 主动代发短信模态弹窗 -->
+  <div class="modal-backdrop" id="sendSmsModal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <span class="card-title">✉️ 发送短信</span>
+        <button class="btn btn-secondary btn-sm" id="btnCloseSendModal" style="padding: 0.2rem 0.5rem;">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">目标手机号码</label>
+          <input type="text" class="form-input" id="sendPhoneInput" placeholder="输入接收方手机号码，例如 10010 或 13800000000">
+        </div>
+        <div class="form-group">
+          <label class="form-label">短信正文内容</label>
+          <textarea class="form-textarea" id="sendContentInput" placeholder="输入待发送的短信内容..."></textarea>
+          <div style="font-size: 0.72rem; color: var(--text-muted); text-align: right;" id="charCount">0 字</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary btn-sm" id="btnCancelSend">取消</button>
+        <button class="btn btn-primary btn-sm" id="btnConfirmSend">立即发送</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 全局自定义确认对话框 (彻底取代浏览器原生丑陋 confirm 弹窗) -->
+  <div class="modal-backdrop" id="customConfirmModal" style="z-index: 200;">
+    <div class="modal-content" style="max-width: 400px; border-radius: var(--radius-lg); box-shadow: var(--shadow-lg);">
+      <div class="modal-body" style="padding: 1.5rem 1.35rem 1rem; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 0.85rem;">
+        <div id="confirmIconWrapper" style="width: 48px; height: 48px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; background: rgba(59, 130, 246, 0.15); color: var(--accent-blue); flex-shrink: 0;">
+          🔄
+        </div>
+        <div>
+          <div id="confirmTitle" style="font-size: 1.05rem; font-weight: 700; color: var(--text-primary); margin-bottom: 0.35rem;">确定要执行此操作吗？</div>
+          <div id="confirmDesc" style="font-size: 0.82rem; color: var(--text-muted); line-height: 1.5;">相关说明文案</div>
+        </div>
+      </div>
+      <div class="modal-footer" style="padding: 0.85rem 1.25rem 1.25rem; border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end; gap: 0.65rem;">
+        <button class="btn btn-secondary btn-sm" id="btnConfirmCancel" style="flex: 1; padding: 0.45rem 1rem; font-size: 0.82rem;">取消</button>
+        <button class="btn btn-primary btn-sm" id="btnConfirmOk" style="flex: 1; padding: 0.45rem 1rem; font-size: 0.82rem;">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Webhook 通知配置抽屉 Drawer -->
+  <div class="drawer-backdrop" id="configDrawerBackdrop">
+    <div class="drawer-content">
+      <div class="drawer-header">
+        <span class="card-title">⚙️ 系统设置</span>
+        <button class="btn btn-secondary btn-sm" id="btnCloseConfigDrawer" style="padding: 0.2rem 0.5rem;">✕</button>
+      </div>
+      <div class="drawer-body">
+        <div style="font-size: 0.78rem; color: var(--text-secondary); line-height: 1.5; background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 6px; padding: 0.75rem;">
+          💡 <b>自动离线同步</b>：配置将自动同步至设备内部储存。拔下设备脱离电脑、单独插在充电头上时，收到新短信依然能自动通过设置的机器人或手机通知推送给你。点击【⚡ 连通性测试】可向指定渠道发送一条测试消息。
+        </div>
+
+        <!-- 1. 飞书 -->
+        <div class="channel-card">
+          <div class="channel-header">
+            <span class="channel-title">🐦 飞书自定义机器人 (Feishu)</span>
+            <label class="switch">
+              <input type="checkbox" id="cfg_feishu_enable">
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Webhook 地址</label>
+            <input type="text" class="form-input" id="cfg_feishu_url" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/...">
+          </div>
+          <div class="form-group">
+            <label class="form-label">安全加签 Secret (可选)</label>
+            <input type="password" class="form-input" id="cfg_feishu_secret" placeholder="若机器人开启安全设置加签，请在此填写 Secret">
+          </div>
+          <div class="channel-test-group">
+            <button class="btn btn-secondary btn-sm" onclick="testChannel('feishu')">⚡ 连通性测试 (Test Ping)</button>
+            <span class="test-feedback" id="feedback_feishu"></span>
+          </div>
+        </div>
+
+        <!-- 2. 企业微信 -->
+        <div class="channel-card">
+          <div class="channel-header">
+            <span class="channel-title">💬 企业微信群机器人 (WeCom)</span>
+            <label class="switch">
+              <input type="checkbox" id="cfg_wecom_enable">
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Webhook 地址</label>
+            <input type="text" class="form-input" id="cfg_wecom_url" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...">
+          </div>
+          <div class="channel-test-group">
+            <button class="btn btn-secondary btn-sm" onclick="testChannel('wecom')">⚡ 连通性测试 (Test Ping)</button>
+            <span class="test-feedback" id="feedback_wecom"></span>
+          </div>
+        </div>
+
+        <!-- 3. 钉钉 -->
+        <div class="channel-card">
+          <div class="channel-header">
+            <span class="channel-title">📌 钉钉群自定义机器人 (DingTalk)</span>
+            <label class="switch">
+              <input type="checkbox" id="cfg_dingtalk_enable">
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Webhook 地址</label>
+            <input type="text" class="form-input" id="cfg_dingtalk_url" placeholder="https://oapi.dingtalk.com/robot/send?access_token=...">
+          </div>
+          <div class="form-group">
+            <label class="form-label">安全加签 Secret (可选)</label>
+            <input type="password" class="form-input" id="cfg_dingtalk_secret" placeholder="填写加签密钥 SEC 开头的密钥字符串">
+          </div>
+          <div class="channel-test-group">
+            <button class="btn btn-secondary btn-sm" onclick="testChannel('dingtalk')">⚡ 连通性测试 (Test Ping)</button>
+            <span class="test-feedback" id="feedback_dingtalk"></span>
+          </div>
+        </div>
+
+        <!-- 4. iOS Bark -->
+        <div class="channel-card">
+          <div class="channel-header">
+            <span class="channel-title">📱 iOS Bark 极速即时推送</span>
+            <label class="switch">
+              <input type="checkbox" id="cfg_bark_enable">
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Bark 服务器推送 URL</label>
+            <input type="text" class="form-input" id="cfg_bark_url" placeholder="例如：https://api.day.app/你的Key/ 或私有服务器">
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem;">
+            <div class="form-group">
+              <label class="form-label">通知分组 (Group)</label>
+              <input type="text" class="form-input" id="cfg_bark_group" placeholder="Air780EPV">
+            </div>
+            <div class="form-group">
+              <label class="form-label">提示铃声 (Sound)</label>
+              <input type="text" class="form-input" id="cfg_bark_sound" placeholder="minuet">
+            </div>
+          </div>
+          <div class="channel-test-group">
+            <button class="btn btn-secondary btn-sm" onclick="testChannel('bark')">⚡ 连通性测试 (Test Ping)</button>
+            <span class="test-feedback" id="feedback_bark"></span>
+          </div>
+        </div>
+
+        <!-- 5. 自定义 Webhook -->
+        <div class="channel-card">
+          <div class="channel-header">
+            <span class="channel-title">🌐 自定义 Webhook (HTTP POST)</span>
+            <label class="switch">
+              <input type="checkbox" id="cfg_webhook_enable">
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="form-label">接收 URL</label>
+            <input type="text" class="form-input" id="cfg_webhook_url" placeholder="https://your-server.com/api/cellular/webhook">
+          </div>
+          <div class="channel-test-group">
+            <button class="btn btn-secondary btn-sm" onclick="testChannel('webhook')">⚡ 连通性测试 (Test Ping)</button>
+            <span class="test-feedback" id="feedback_webhook"></span>
+          </div>
+        </div>
+
+        <!-- 6. 物理硬件与离线检测设置 -->
+        <div class="channel-card">
+          <div class="channel-header">
+            <span class="channel-title">🔌 硬件拔出与离线判定</span>
+          </div>
+          <div class="form-group">
+            <label class="form-label">离线判定超时时间</label>
+            <select class="form-input" id="cfg_offline_timeout" style="padding: 0.45rem 0.65rem; cursor: pointer;">
+              <option value="3">3 秒 (即时响应 · 拔出后快速切离线)</option>
+              <option value="5" selected>5 秒 (推荐平衡 · 兼顾抗抖动与灵敏度)</option>
+              <option value="10">10 秒 (防瞬断抖动)</option>
+              <option value="15">15 秒 (宽容模式)</option>
+              <option value="30">30 秒 (长延迟保持)</option>
+            </select>
+            <div style="font-size: 0.72rem; color: var(--text-muted); margin-top: 0.35rem; line-height: 1.4;">
+              💡 当 4G 短信棒从 USB 拔出或物理串口断开超过该时间未收到心跳包，网页端将自动判定为【设备已断开】并置灰操作面板。
+            </div>
+          </div>
+        </div>
+
+        <!-- 蜂窝空中热更新 (FOTA) -->
+        <div class="channel-card">
+          <div class="channel-header">
+            <div class="channel-title">
+              <span class="channel-icon">🚀</span>
+              <span>蜂窝空中热更新 (FOTA)</span>
+            </div>
+            <span class="badge" id="fotaCurrentVersionBadge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 9999px;">v1.2.5 就绪</span>
+          </div>
+          <div style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.65rem; line-height: 1.5;">
+            支持<strong>管理员拨打暗号电话（0 话费秒拒接）</strong>或点击下方按钮，随时在脱机充电头或插电脑状态下空中热更新固件。
+          </div>
+          <div style="display: flex; gap: 0.5rem; align-items: center;">
+            <button type="button" class="btn btn-secondary btn-sm" id="btnTriggerFota" style="flex: 1;">
+              ⚡ 检查并触发空中热更新
+            </button>
+          </div>
+        </div>
+
+        <!-- 系统与交互偏好设置 -->
+        <div class="channel-card">
+          <div class="channel-header">
+            <div class="channel-title">
+              <span class="channel-icon">⚡</span>
+              <span>系统与交互设置</span>
+            </div>
+          </div>
+          <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.35rem 0;">
+            <div>
+              <div style="font-size: 0.85rem; font-weight: 500; color: var(--text-primary);">自动复制验证码到剪贴板</div>
+              <div style="font-size: 0.72rem; color: var(--text-muted); line-height: 1.4; margin-top: 0.15rem;">
+                收到新验证码短信时，自动存入 Windows 宿主剪贴板，可直接 Ctrl+V 粘贴
+              </div>
+            </div>
+            <label class="switch" style="margin-left: 0.75rem; flex-shrink: 0;">
+              <input type="checkbox" id="cfg_auto_copy_otp" checked>
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+
+      </div>
+      <div class="drawer-footer">
+        <button class="btn btn-secondary btn-sm" id="btnCancelConfigDrawer">取消</button>
+        <button class="btn btn-primary btn-sm" id="btnSaveConfigDrawer">💾 保存配置</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast 提示容器 -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script>
+    // 状态仓库
+    const state = {
+      // 多卡槽通信集群状态 (AIR-19)
+      connected: false,        // SSE/Web 接口连接状态
+      deviceOnline: null,      // 4G 短信棒硬件物理在线状态 (true | false)
+      lastHeartbeatTime: 0,    // 最近一次收到硬件有效数据/心跳的时间戳 (ms)
+      offlineTimeoutSec: parseInt(localStorage.getItem("air780_offline_timeout_sec") || "5", 10), // 离线超时判定阈值 (默认 5 秒)
+      status: {},
+      smsList: [],
+      smsTotal: 0,             // 硬件黑匣子总短信记录数
+      smsNextCursor: null,     // 下一页分页游标
+      smsHasMore: false,       // 是否有更早的记录未加载
+      smsLoadingMore: false,   // 是否正在异步拉取更早记录
+      refreshCooldown: false,  // 刷新冷却锁 (防连击打垮微内核)
+      calls: [],
+      latestOtp: null,
+      filterKeyword: "",
+      sortOrder: "desc" // "desc": 最新在最上 (默认), "asc": 最早在最上
+    };
+
+    // DOM 元素
+    const el = {
+      netBadge: document.getElementById("netStatusBadge"),
+      netText: document.getElementById("netStatusText"),
+      boardModel: document.getElementById("boardModel"),
+      csqBadge: document.getElementById("csqBadge"),
+      signalVal: document.getElementById("signalValue"),
+      signalBars: document.getElementById("signalBars").children,
+      netMode: document.getElementById("netMode"),
+      coreTemp: document.getElementById("coreTemp"),
+      vbatValue: document.getElementById("vbatValue"),
+      storageUptime: document.getElementById("storageUptime"),
+      toggleRndis: document.getElementById("toggleRndis"),
+      toggleData: document.getElementById("toggleCellularData"),
+      btnReboot: document.getElementById("btnRebootGateway"),
+      btnClearHistory: document.getElementById("btnClearHistory"),
+      otpBanner: document.getElementById("topOtpPill"),
+      otpCodeDisplay: document.getElementById("topOtpCode"),
+      otpSenderDesc: null,
+      btnCopyOtp: document.getElementById("btnTopOtpCopy"),
+      topOtpPill: document.getElementById("topOtpPill"),
+      topOtpLabel: document.getElementById("topOtpLabel"),
+      topOtpCode: document.getElementById("topOtpCode"),
+      btnTopOtpCopy: document.getElementById("btnTopOtpCopy"),
+      topOtpCopyIcon: document.getElementById("topOtpCopyIcon"),
+      topOtpCopyText: document.getElementById("topOtpCopyText"),
+      smsContainer: document.getElementById("smsContainer"),
+      searchSms: document.getElementById("searchSms"),
+      btnToggleSort: document.getElementById("btnToggleSort"),
+      sortIcon: document.getElementById("sortIcon"),
+      sortText: document.getElementById("sortText"),
+      btnRefreshHistory: document.getElementById("btnRefreshHistory"),
+      btnManualRefresh: document.getElementById("btnManualRefresh"),
+      manualRefreshIcon: document.getElementById("manualRefreshIcon"),
+      callList: document.getElementById("callList"),
+      callCountText: document.getElementById("callCountText"),
+      sendModal: document.getElementById("sendSmsModal"),
+      btnOpenSend: document.getElementById("btnOpenSendModal"),
+      btnCloseSend: document.getElementById("btnCloseSendModal"),
+      btnCancelSend: document.getElementById("btnCancelSend"),
+      btnConfirmSend: document.getElementById("btnConfirmSend"),
+      sendPhone: document.getElementById("sendPhoneInput"),
+      sendContent: document.getElementById("sendContentInput"),
+      charCount: document.getElementById("charCount"),
+      toastContainer: document.getElementById("toastContainer"),
+      // Webhook 配置抽屉 DOM
+      btnOpenConfigDrawer: document.getElementById("btnOpenConfigDrawer"),
+      btnCloseConfigDrawer: document.getElementById("btnCloseConfigDrawer"),
+      btnCancelConfigDrawer: document.getElementById("btnCancelConfigDrawer"),
+      btnSaveConfigDrawer: document.getElementById("btnSaveConfigDrawer"),
+      configDrawerBackdrop: document.getElementById("configDrawerBackdrop"),
+      cfgOfflineTimeout: document.getElementById("cfg_offline_timeout"),
+      btnTriggerFota: document.getElementById("btnTriggerFota"),
+      // 底部统计
+      smsStatCount: document.getElementById("smsStatCount")
+    };
+
+    // 智能验证码提取正则引擎 (前端增强版)
+    function extractOtpClient(text) {
+      if (!text) return null;
+      // 常见验证码词前缀
+      const patterns = [
+        /(?:验证码|校验码|动态码|code|otp|auth\s*code)[^\d]{0,8}([0-9]{4,8})/i,
+        /([0-9]{4,8})[^\d]{0,8}(?:为您的|是您的|做为您的|就是您的)/i,
+        /(?:动态密码|口令)[^\d]{0,8}([0-9]{4,8})/i
+      ];
+      for (const p of patterns) {
+        const m = text.match(p);
+        if (m && m[1]) return m[1];
+      }
+      return null;
+    }
+
+    // 轻提示
+    function showToast(msg, type = "success") {
+      const toast = document.createElement("div");
+      toast.className = `toast ${type}`;
+      toast.textContent = msg;
+      el.toastContainer.appendChild(toast);
+      setTimeout(() => {
+        toast.style.opacity = "0";
+        toast.style.transform = "translateY(10px)";
+        toast.style.transition = "all 0.3s";
+        setTimeout(() => toast.remove(), 300);
+      }, 3000);
+    }
+
+    // 更新信号格
+    function updateSignalBars(csq) {
+      let activeCount = 0;
+      if (csq >= 22) activeCount = 5;
+      else if (csq >= 16) activeCount = 4;
+      else if (csq >= 11) activeCount = 3;
+      else if (csq >= 6) activeCount = 2;
+      else if (csq > 0) activeCount = 1;
+
+      for (let i = 0; i < el.signalBars.length; i++) {
+        if (i < activeCount) {
+          el.signalBars[i].classList.add("active");
+        } else {
+          el.signalBars[i].classList.remove("active");
+        }
+      }
+    }
+
+    // 切换设备物理在线/离线状态
+    function setDeviceOnlineState(online, reason = "") {
+      const wasOnline = state.deviceOnline;
+      state.deviceOnline = online;
+
+      if (online) {
+        el.netBadge.className = "status-badge status-badge-action";
+        el.netText.textContent = "设备已连接";
+        el.netBadge.title = `4G 短信棒物理连接正常 (点击可刷新 · 离线判定超时: ${state.offlineTimeoutSec}s)`;
+        el.boardModel.textContent = "🟢 免流量保护中 · 本地宽带代推已启用";
+
+        const hwTitle = document.getElementById("hardwareStatusTitle");
+        if (hwTitle) hwTitle.textContent = "🛡️ 设备工况正常";
+
+        el.btnReboot.disabled = false;
+        el.btnOpenSend.classList.remove("disabled");
+        el.btnOpenSend.setAttribute("aria-disabled", "false");
+        el.btnOpenSend.setAttribute("title", "打开短信编辑发送窗口");
+        el.toggleData.disabled = false;
+        updateRndisAvailability();
+
+        if (wasOnline === false) {
+          showToast("🟢 4G 短信棒已重新连接", "success");
+        }
+      } else {
+        el.netBadge.className = "status-badge status-badge-action offline";
+        el.netText.textContent = "设备已断开";
+        el.netBadge.title = reason || `4G 短信棒已拔出或物理串口已断开 (点击可重试刷新)`;
+        el.boardModel.textContent = "🔴 硬件已断开 · 短信棒未插入或物理串口已失效";
+
+        if (el.csqBadge) {
+          el.csqBadge.textContent = "未就绪 (已离线)";
+          el.csqBadge.title = reason || "硬件已断开";
+        }
+        if (el.signalVal) {
+          el.signalVal.textContent = "已断开";
+          el.signalVal.title = "物理连接已断开";
+        }
+        updateSignalBars(0);
+
+        if (el.coreTemp) el.coreTemp.textContent = "-- ℃";
+        if (el.vbatValue) el.vbatValue.textContent = "-- V";
+        if (el.storageUptime) el.storageUptime.textContent = "-- / 0秒";
+
+        const hwTitle = document.getElementById("hardwareStatusTitle");
+        if (hwTitle) hwTitle.textContent = "🔌 设备已离线";
+        const diagEl = document.getElementById("hardwareDiagnosticText");
+        if (diagEl) diagEl.textContent = "核心 -- ℃ · 供电 -- V";
+
+        el.btnReboot.disabled = true;
+        el.btnOpenSend.classList.add("disabled");
+        el.btnOpenSend.setAttribute("aria-disabled", "true");
+        el.btnOpenSend.setAttribute("title", "短信棒未插入或已断开，无法主动代发短信");
+        el.toggleData.disabled = true;
+        el.toggleRndis.disabled = true;
+
+        if (wasOnline === true) {
+          showToast("🔴 4G 短信棒已断开连接", "error");
+        }
+      }
+    }
+
+    // 联动控制：若蜂窝移动数据未打开，USB网络共享置灰禁用
+    function updateRndisAvailability() {
+      const isDataEnabled = el.toggleData.checked;
+      const rndisRow = document.getElementById("rndisRow");
+      const rndisLockBadge = document.getElementById("rndisLockBadge");
+
+      if (!isDataEnabled) {
+        el.toggleRndis.disabled = true;
+        if (rndisRow) {
+          rndisRow.classList.add("disabled");
+          rndisRow.title = "请先开启上方【蜂窝移动数据】，才可开启 USB 网络共享";
+        }
+        if (rndisLockBadge) rndisLockBadge.style.display = "inline-block";
+        // 若移动数据已关闭，强行联动在界面上关闭网络共享
+        el.toggleRndis.checked = false;
+      } else {
+        el.toggleRndis.disabled = false;
+        if (rndisRow) {
+          rndisRow.classList.remove("disabled");
+          rndisRow.removeAttribute("title");
+        }
+        if (rndisLockBadge) rndisLockBadge.style.display = "none";
+      }
+    }
+
+
+    // 渲染状态看板
+    function renderStatus(data) {
+      if (!data) return;
+      state.status = data;
+
+      if (data.online === false) {
+        setDeviceOnlineState(false, "模组未响应或物理设备已拔出");
+        return;
+      }
+
+      state.lastHeartbeatTime = Date.now();
+      setDeviceOnlineState(true);
+
+      const csq = data.csq !== undefined ? data.csq : 0;
+      let csqText = "良好 (4G)";
+      let csqBadgeDesc = "4G 信号良好";
+      if (csq >= 22) {
+        csqText = "极佳 (4G)";
+        csqBadgeDesc = "4G 信号极佳";
+      } else if (csq >= 15) {
+        csqText = "良好 (4G)";
+        csqBadgeDesc = "4G 信号良好";
+      } else if (csq >= 10) {
+        csqText = "一般 (4G)";
+        csqBadgeDesc = "4G 信号一般";
+      } else if (csq > 0) {
+        csqText = "微弱 (4G)";
+        csqBadgeDesc = "4G 信号微弱";
+      } else {
+        csqText = "无信号";
+        csqBadgeDesc = "无网络信号";
+      }
+
+      if (el.csqBadge) {
+        el.csqBadge.textContent = csqBadgeDesc;
+        el.csqBadge.title = `基站信号强度 CSQ: ${csq} / 31`;
+      }
+      if (el.signalVal) {
+        el.signalVal.textContent = csqText;
+        el.signalVal.title = `原始指标: CSQ ${csq}/31`;
+      }
+      updateSignalBars(csq);
+
+      // 次要诊断工况信息收敛
+      let tempStr = "-- ℃";
+      if (data.temp !== undefined) {
+        let t = parseFloat(data.temp);
+        tempStr = isNaN(t) ? `${data.temp} ℃` : `${t.toFixed(1)} ℃`;
+      }
+      let vbatStr = "-- V";
+      if (data.vbat !== undefined) {
+        let v = parseFloat(data.vbat);
+        if (!isNaN(v)) {
+          if (v > 100) v = v / 1000;
+          vbatStr = `${v.toFixed(2)} V`;
+        } else {
+          vbatStr = `${data.vbat} V`;
+        }
+      }
+      const diagEl = document.getElementById("hardwareDiagnosticText");
+      if (diagEl) {
+        diagEl.textContent = `核心 ${tempStr} · 供电 ${vbatStr}`;
+      }
+
+      const smsCount = data.sms_count !== undefined ? data.sms_count : 0;
+      const storageDisplayEl = document.getElementById("storageSmsDisplay");
+      if (storageDisplayEl) {
+        storageDisplayEl.textContent = `${smsCount} / 100 条`;
+      }
+
+      let uptimeDesc = "--";
+      if (data.uptime !== undefined && !isNaN(data.uptime)) {
+        const totalMin = Math.floor(data.uptime / 60);
+        const hours = Math.floor(totalMin / 60);
+        const mins = totalMin % 60;
+        uptimeDesc = hours > 0 ? `${hours}小时${mins}分` : `${mins}分钟`;
+      }
+      const uptimeDisplayEl = document.getElementById("uptimeDisplay");
+      if (uptimeDisplayEl) {
+        uptimeDisplayEl.textContent = uptimeDesc;
+      }
+      if (el.storageUptime) {
+        el.storageUptime.textContent = `${smsCount} 条 / 连续运行 ${uptimeDesc}`;
+      }
+
+      const dataVal = data.cellular_data_enable !== undefined ? data.cellular_data_enable : data.cellular_data;
+      if (dataVal !== undefined) el.toggleData.checked = !!dataVal;
+
+      const rndisVal = data.rndis_enable !== undefined ? data.rndis_enable : data.rndis;
+      if (rndisVal !== undefined) el.toggleRndis.checked = !!rndisVal;
+
+      // 同步当前固件版本号徽标
+      const verVal = data.version || data.current_version || (data.raw && data.raw.version);
+      if (verVal) {
+        const verBadge = document.getElementById("firmwareVersionBadge");
+        if (verBadge) verBadge.textContent = `v${verVal}`;
+        const fotaBadge = document.getElementById("fotaCurrentVersionBadge");
+        if (fotaBadge) fotaBadge.textContent = `v${verVal} 就绪`;
+      }
+
+      // 同步本机手机卡号
+      const phoneValEl = document.getElementById("simPhoneVal");
+      if (phoneValEl) {
+        const rawNum = (data.raw && data.raw.number) || data.number;
+        if (rawNum && rawNum.length >= 11) {
+          const clean = rawNum.replace(/^\+86/, "").trim();
+          if (clean.length === 11) {
+            phoneValEl.textContent = `${clean.slice(0, 3)} ${clean.slice(3, 7)} ${clean.slice(7)}`;
+          } else {
+            phoneValEl.textContent = rawNum;
+          }
+        } else {
+          phoneValEl.textContent = (data.csq > 0 ? "未读出号码" : "无 SIM 卡");
+        }
+      }
+
+      // 状态拉取后根据移动数据开关状态联动 USB 网络共享置灰/启用
+      updateRndisAvailability();
+    }
+
+    // 切换排序按钮外观与提示
+    function updateSortButtonUI() {
+      if (el.sortIcon && el.sortText) {
+        if (state.sortOrder === "desc") {
+          el.sortIcon.textContent = "⬇️";
+          el.sortText.textContent = "最新优先";
+          el.btnToggleSort.title = "当前：最新优先（时间更晚在最上面），点击切换为最早优先";
+        } else {
+          el.sortIcon.textContent = "⬆️";
+          el.sortText.textContent = "最早优先";
+          el.btnToggleSort.title = "当前：最早优先（时间更早在最上面），点击切换为最新优先";
+        }
+      }
+    }
+
+    // 渲染短信列表
+    function renderSmsList() {
+      const keyword = state.filterKeyword.trim().toLowerCase();
+      let filtered = state.smsList.filter(item => {
+        if (!keyword) return true;
+        const sender = (item.sender || item.phone || "").toLowerCase();
+        const content = (item.content || "").toLowerCase();
+        return sender.includes(keyword) || content.includes(keyword);
+      });
+
+      // 按照用户设置的时间排序（默认降序：最新排在最上面）
+      filtered.sort((a, b) => {
+        const tA = String(a.time || a.received_at || "");
+        const tB = String(b.time || b.received_at || "");
+        if (state.sortOrder === "desc") {
+          return tB.localeCompare(tA);
+        } else {
+          return tA.localeCompare(tB);
+        }
+      });
+
+      if (el.smsStatCount) {
+        if (state.smsTotal > 0 && state.smsTotal > filtered.length && !keyword) {
+          el.smsStatCount.textContent = `显示 ${filtered.length} / ${state.smsTotal} 条`;
+        } else {
+          el.smsStatCount.textContent = `显示 ${filtered.length} 条`;
+        }
+      }
+
+      if (filtered.length === 0) {
+        el.smsContainer.innerHTML = `
+          <div class="empty-state">
+            <span style="font-size: 1.5rem;">📭</span>
+            <span>${keyword ? "未搜索到匹配的短信记录" : "板载黑匣子暂无短信"}</span>
+          </div>
+        `;
+        return;
+      }
+
+      el.smsContainer.innerHTML = "";
+      filtered.forEach(sms => {
+        const sender = sms.sender || sms.phone || "未知号码";
+        const content = sms.content || "";
+        const timeStr = sms.time || sms.received_at || "刚刚";
+        const otp = sms.otp || extractOtpClient(content);
+
+        const card = document.createElement("div");
+        card.className = "sms-item";
+
+        // 判断是否为服务商号码
+        let tagHtml = "";
+        if (sender.startsWith("100") || sender.startsWith("955") || sender.length <= 6) {
+          tagHtml = `<span class="sms-tag">服务通知</span>`;
+        }
+
+        let otpBadge = "";
+        if (otp) {
+          otpBadge = `
+            <div class="otp-pill" onclick="copyText('${otp}', '验证码已复制: ${otp}')" title="点击一键复制验证码">
+              <span>🔑 复制验证码: <strong>${otp}</strong></span>
+            </div>
+          `;
+        }
+
+        card.innerHTML = `
+          <div class="sms-header">
+            <div class="sms-sender">
+              <span>${escapeHtml(sender)}</span>
+              ${tagHtml}
+            </div>
+            <div class="sms-meta">
+              <span class="sms-time">${escapeHtml(timeStr)}</span>
+              ${otpBadge}
+            </div>
+          </div>
+          <div class="sms-content">${escapeHtml(content)}</div>
+        `;
+        el.smsContainer.appendChild(card);
+      });
+
+      // 懒加载控制槽：若存在更多脱机历史短信，渲染触底加载或已加载完毕状态
+      if (state.smsHasMore && !keyword) {
+        const loadMoreDiv = document.createElement("div");
+        loadMoreDiv.className = "sms-load-more sms-load-more-btn";
+        if (state.smsLoadingMore) {
+          loadMoreDiv.innerHTML = `<span class="refresh-icon spinning">🔄</span> <span>正在自动拉取更早短信...</span>`;
+        } else {
+          const remain = (state.smsTotal > state.smsList.length) ? ` (黑匣子尚有 ${state.smsTotal - state.smsList.length} 条)` : "";
+          loadMoreDiv.innerHTML = `<span>⬇️ 向下滚动自动加载更早短信${remain}</span>`;
+          loadMoreDiv.onclick = (e) => {
+            e.stopPropagation();
+            loadMoreSms();
+          };
+        }
+        el.smsContainer.appendChild(loadMoreDiv);
+
+        // 绑定/更新 IntersectionObserver 实现自动化无感懒加载
+        if (window.IntersectionObserver) {
+          if (state.smsObserver) {
+            state.smsObserver.disconnect();
+          }
+          state.smsObserver = new IntersectionObserver((entries) => {
+            for (const entry of entries) {
+              if (entry.isIntersecting && state.smsHasMore && !state.smsLoadingMore && !state.filterKeyword) {
+                loadMoreSms();
+                break;
+              }
+            }
+          }, {
+            root: el.smsContainer,
+            rootMargin: "160px" // 提前 160px 预加载，滑动到底部前自动拉取完成
+          });
+          state.smsObserver.observe(loadMoreDiv);
+        }
+      } else if (state.smsList.length > 0 && !keyword) {
+        if (state.smsObserver) {
+          state.smsObserver.disconnect();
+          state.smsObserver = null;
+        }
+        const endDiv = document.createElement("div");
+        endDiv.className = "sms-load-more sms-loaded-all";
+        endDiv.textContent = `✓ 已加载全部 ${state.smsList.length} 条脱机记录`;
+        el.smsContainer.appendChild(endDiv);
+      }
+    }
+
+    // 更新顶栏中央最新验证码徽章
+    function updateOtpBanner(otp, sender) {
+      if (!el.topOtpPill) return;
+      if (!otp) {
+        state.latestOtp = null;
+        el.topOtpPill.classList.remove("has-otp");
+        el.topOtpPill.classList.add("empty");
+        if (el.topOtpLabel) el.topOtpLabel.textContent = "最新验证码";
+        if (el.topOtpCode) el.topOtpCode.textContent = "--";
+        el.topOtpPill.title = "暂无最新验证码";
+        return;
+      }
+      state.latestOtp = otp;
+      el.topOtpPill.classList.remove("empty");
+      el.topOtpPill.classList.add("has-otp");
+      if (el.topOtpLabel) el.topOtpLabel.textContent = "最新验证码";
+      if (el.topOtpCode) el.topOtpCode.textContent = otp;
+      const senderText = sender ? ` (来自 ${sender})` : "";
+      el.topOtpPill.title = `点击一键复制最新验证码: ${otp}${senderText}`;
+      // 触发轻柔微脉冲动画增强感知
+      el.topOtpPill.classList.remove("pulse-anim");
+      void el.topOtpPill.offsetWidth;
+      el.topOtpPill.classList.add("pulse-anim");
+    }
+
+    // 渲染来电记录列表
+    function renderCalls() {
+      el.callCountText.textContent = `${state.calls.length} 条`;
+      if (state.calls.length === 0) {
+        el.callList.style.overflowY = "hidden"; // 空状态下严禁产生滚动条
+        el.callList.innerHTML = `
+          <div class="empty-state" style="flex: 1; min-height: 50px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.35rem; color: var(--text-muted); padding: 0.5rem 0;">
+            <span style="font-size: 1.35rem;">📞</span>
+            <span style="font-size: 0.78rem;">暂无来电记录</span>
+          </div>
+        `;
+        return;
+      }
+      el.callList.style.overflowY = "auto";
+      el.callList.innerHTML = "";
+      state.calls.forEach(c => {
+        const row = document.createElement("div");
+        row.className = "call-item";
+        row.innerHTML = `
+          <div style="display: flex; align-items: center; gap: 0.45rem;">
+            <span style="font-size: 0.85rem;">🚫</span>
+            <span style="color: #f87171; font-family: var(--font-mono); font-weight: 600; font-size: 0.83rem;">${escapeHtml(c.phone || "未知号码")}</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 0.4rem;">
+            <span style="color: var(--text-muted); font-size: 0.72rem;">${escapeHtml(c.time || "刚刚")}</span>
+            <span class="status-badge" style="padding: 0.05rem 0.35rem; font-size: 0.68rem; background: rgba(239,68,68,0.12); color: #f87171;">已拒接</span>
+          </div>
+        `;
+        el.callList.appendChild(row);
+      });
+    }
+
+    // 现代化异步确认弹窗（彻底取代浏览器原生 confirm 弹窗）
+    function showConfirm({
+      title = "确认操作",
+      desc = "确定要继续吗？",
+      icon = "ℹ️",
+      confirmText = "确定",
+      cancelText = "取消",
+      type = "primary" // 'primary' | 'danger'
+    } = {}) {
+      return new Promise((resolve) => {
+        const modal = document.getElementById("customConfirmModal");
+        const titleEl = document.getElementById("confirmTitle");
+        const descEl = document.getElementById("confirmDesc");
+        const iconWrapper = document.getElementById("confirmIconWrapper");
+        const btnOk = document.getElementById("btnConfirmOk");
+        const btnCancel = document.getElementById("btnConfirmCancel");
+
+        titleEl.textContent = title;
+        descEl.textContent = desc;
+        iconWrapper.textContent = icon;
+
+        if (type === "danger") {
+          iconWrapper.style.background = "rgba(239, 68, 68, 0.15)";
+          iconWrapper.style.color = "#f87171";
+          btnOk.className = "btn btn-danger btn-sm";
+        } else {
+          iconWrapper.style.background = "rgba(59, 130, 246, 0.15)";
+          iconWrapper.style.color = "var(--accent-blue)";
+          btnOk.className = "btn btn-primary btn-sm";
+        }
+
+        btnOk.textContent = confirmText;
+        btnCancel.textContent = cancelText;
+
+        modal.classList.add("active");
+
+        const cleanup = () => {
+          modal.classList.remove("active");
+          btnOk.removeEventListener("click", onOk);
+          btnCancel.removeEventListener("click", onCancel);
+          modal.removeEventListener("click", onBackdrop);
+          window.removeEventListener("keydown", onKey);
+        };
+
+        const onOk = () => { cleanup(); resolve(true); };
+        const onCancel = () => { cleanup(); resolve(false); };
+        const onBackdrop = (e) => { if (e.target === modal) { cleanup(); resolve(false); } };
+        const onKey = (e) => {
+          if (e.key === "Escape") { cleanup(); resolve(false); }
+          if (e.key === "Enter") { cleanup(); resolve(true); }
+        };
+
+        btnOk.addEventListener("click", onOk);
+        btnCancel.addEventListener("click", onCancel);
+        modal.addEventListener("click", onBackdrop);
+        window.addEventListener("keydown", onKey);
+      });
+    }
+
+    // 复制剪贴板工具函数
+    function copyText(text, successMsg = "已复制到剪贴板") {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => {
+          showToast(successMsg, "success");
+        }).catch(() => fallbackCopy(text, successMsg));
+      } else {
+        fallbackCopy(text, successMsg);
+      }
+    }
+
+    function fallbackCopy(text, successMsg) {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+      showToast(successMsg, "success");
+    }
+
+    function escapeHtml(str) {
+      return String(str).replace(/[&<>'"]/g, tag => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;"
+      }[tag] || tag));
+    }
+
+    // REST API 请求函数 (支持多态参数)
+    async function apiFetch(endpoint, method = "GET", body = null) {
+      try {
+        let opts = { method: "GET", headers: { "Content-Type": "application/json" } };
+        if (typeof method === "object" && method !== null) {
+          opts = Object.assign(opts, method);
+          if (opts.body && typeof opts.body !== "string") {
+            opts.body = JSON.stringify(opts.body);
+          }
+        } else {
+          opts.method = method;
+          if (body) opts.body = JSON.stringify(body);
+        }
+        const res = await fetch(endpoint, opts);
+        return await res.json();
+      } catch (err) {
+        console.error("API 请求失败:", err);
+        return { ok: false, error: err.message };
+      }
+    }
+
+    // 离线判定看门狗：定时检测上次有效硬件通信与超时阈值
+    function checkHeartbeatWatchdog() {
+      if (state.deviceOnline === false) return;
+      if (!state.lastHeartbeatTime) return;
+
+      const elapsed = Date.now() - state.lastHeartbeatTime;
+      const timeoutMs = (state.offlineTimeoutSec || 5) * 1000;
+
+      if (elapsed > timeoutMs) {
+        setDeviceOnlineState(false, `已超时 ${Math.round(elapsed / 1000)}s 未响应，设备已拔出`);
+      }
+    }
+
+    // 后台心跳探测调度
+    let heartbeatTimer = null;
+    function scheduleNextHeartbeat() {
+      if (heartbeatTimer) clearTimeout(heartbeatTimer);
+      const interval = Math.max(2000, Math.min((state.offlineTimeoutSec || 5) * 600, 5000));
+      heartbeatTimer = setTimeout(async () => {
+        await pollDeviceHeartbeat();
+        scheduleNextHeartbeat();
+      }, interval);
+    }
+
+    async function pollDeviceHeartbeat() {
+      try {
+        const st = await apiFetch("/api/status");
+        if (st && st.ok && st.online !== false && st.data && st.data.online !== false) {
+          state.lastHeartbeatTime = Date.now();
+          renderStatus(st.data);
+        } else {
+          const now = Date.now();
+          const timeoutMs = (state.offlineTimeoutSec || 5) * 1000;
+          if (!state.lastHeartbeatTime || (now - state.lastHeartbeatTime >= timeoutMs)) {
+            setDeviceOnlineState(false, (st && st.error) || "短信棒未插入或物理串口已拔出");
+          }
+        }
+      } catch (err) {
+        const now = Date.now();
+        const timeoutMs = (state.offlineTimeoutSec || 5) * 1000;
+        if (!state.lastHeartbeatTime || (now - state.lastHeartbeatTime >= timeoutMs)) {
+          setDeviceOnlineState(false, "网关通信超时");
+        }
+      }
+    }
+
+    // 异步拉取短信历史记录 (reset=true 为重置首屏，reset=false 为游标懒加载追加)
+    async function fetchSmsHistory(reset = true) {
+      if (reset) {
+        state.smsNextCursor = null;
+        state.smsHasMore = false;
+        state.emptyFetchCount = 0;
+      }
+      let url = `/api/history?limit=15&order=${state.sortOrder}`;
+      if (!reset && state.smsNextCursor) {
+        url += `&cursor=${encodeURIComponent(state.smsNextCursor)}`;
+      }
+
+      const hist = await apiFetch(url);
+      if (hist && hist.ok) {
+        const d = hist.data || hist;
+        const newItems = d.list || d.items || [];
+        
+        // 解析总条数
+        if (d.total != null) {
+          state.smsTotal = d.total;
+        } else if (reset) {
+          state.smsTotal = newItems.length;
+        }
+
+        // 解析下一页游标
+        state.smsNextCursor = d.next_cursor || null;
+
+        // 判定是否还有更多脱机短信：
+        // 1. 优先使用后端显式返回的 has_more 标识
+        // 2. 或下一页游标有效存在且不为 '0'
+        // 3. 或板端声明的总数明确大于当前已加载量
+        if (d.has_more !== undefined) {
+          state.smsHasMore = Boolean(d.has_more);
+        } else if (d.next_cursor && String(d.next_cursor) !== "0") {
+          state.smsHasMore = true;
+        } else if (state.smsTotal > (reset ? newItems.length : (state.smsList.length + newItems.length))) {
+          state.smsHasMore = true;
+        } else {
+          state.smsHasMore = false;
+        }
+
+        // 熔断防护：如果非重置请求返回了 0 条新记录，强制结束懒加载，避免死循环
+        if (!reset && newItems.length === 0) {
+          state.emptyFetchCount = (state.emptyFetchCount || 0) + 1;
+          if (state.emptyFetchCount >= 1) {
+            state.smsHasMore = false;
+          }
+        } else {
+          state.emptyFetchCount = 0;
+        }
+
+        if (reset) {
+          state.smsList = newItems;
+        } else {
+          // 追加去重（根据 id 或 内容+时间）
+          const existingKeys = new Set(state.smsList.map(s => s.id || `${s.phone}_${s.time}_${s.content}`));
+          for (const it of newItems) {
+            const k = it.id || `${it.phone}_${it.time}_${it.content}`;
+            if (!existingKeys.has(k)) {
+              state.smsList.push(it);
+              existingKeys.add(k);
+            }
+          }
+        }
+        renderSmsList();
+
+        // 查找最新的一条带有验证码的短信更新顶栏徽章（始终按时间降序查找最新）
+        if (reset) {
+          const sortedDesc = [...state.smsList].sort((a, b) => String(b.time || "").localeCompare(String(a.time || "")));
+          let found = false;
+          for (const item of sortedDesc) {
+            const otp = item.otp || extractOtpClient(item.content);
+            if (otp) {
+              updateOtpBanner(otp, item.sender || item.phone);
+              found = true;
+              break;
+            }
+          }
+          if (!found) {
+            updateOtpBanner(null);
+          }
+        }
+      }
+    }
+
+    // 触发懒加载下一页更早的短信
+    async function loadMoreSms() {
+      if (state.smsLoadingMore || !state.smsHasMore) return;
+      state.smsLoadingMore = true;
+      renderSmsList();
+      try {
+        await fetchSmsHistory(false);
+      } catch (err) {
+        showToast(`加载更早短信失败: ${err.message}`, "error");
+      } finally {
+        state.smsLoadingMore = false;
+        renderSmsList();
+      }
+    }
+
+    // 手动刷新按钮响应 (带防连击与微内核保护)
+    async function manualRefresh() {
+      if (state.refreshCooldown) {
+        showToast("⏳ 正在刷新中，请稍候...", "info", 1500);
+        return;
+      }
+      state.refreshCooldown = true;
+
+      if (el.manualRefreshIcon) el.manualRefreshIcon.classList.add("spinning");
+      if (el.btnManualRefresh) el.btnManualRefresh.disabled = true;
+
+      const prevNetText = el.netText ? el.netText.textContent : "";
+      if (el.netText) el.netText.textContent = "刷新中...";
+
+      const startTime = Date.now();
+      try {
+        await refreshAll();
+        if (state.deviceOnline) {
+          showToast("✓ 数据已刷新：4G 短信棒正常在线", "success");
+        } else {
+          showToast("✕ 数据已刷新：短信棒未插入或已断开", "error");
+        }
+      } catch (err) {
+        showToast(`刷新失败: ${err.message}`, "error");
+      } finally {
+        const elapsed = Date.now() - startTime;
+        const remain = Math.max(0, 800 - elapsed);
+        setTimeout(() => {
+          if (el.manualRefreshIcon) el.manualRefreshIcon.classList.remove("spinning");
+          if (el.btnManualRefresh) el.btnManualRefresh.disabled = false;
+          if (el.netText && el.netText.textContent === "刷新中...") {
+            el.netText.textContent = state.deviceOnline ? "设备已连接" : "设备已断开";
+          }
+          // 2 秒安全冷却，彻底防止高频并发连击压垮单片机物理串口
+          setTimeout(() => {
+            state.refreshCooldown = false;
+          }, 1500);
+        }, remain);
+      }
+    }
+
+    // 刷新全部数据
+    async function refreshAll() {
+      // 1. 获取状态
+      const st = await apiFetch("/api/status");
+      if (st && st.ok && st.online !== false && st.data && st.data.online !== false) {
+        state.lastHeartbeatTime = Date.now();
+        renderStatus(st.data);
+      } else {
+        setDeviceOnlineState(false, (st && st.error) || "短信棒未插入或物理串口已拔出");
+      }
+
+      // 2. 获取短信历史首屏 (单批次上限 15 条，防止板载 128KB 内存溢出)
+      await fetchSmsHistory(true);
+
+      // 3. 获取来电历史记录
+      const callsRes = await apiFetch("/api/calls");
+      if (callsRes && callsRes.ok && callsRes.data) {
+        state.calls = callsRes.data.list || [];
+        renderCalls();
+      }
+    }
+
+    // 建立 SSE 实时推送流
+    function setupEventSource() {
+      const sse = new EventSource("/api/events");
+
+      sse.onopen = () => {
+        state.connected = true;
+      };
+
+      sse.onerror = () => {
+        state.connected = false;
+        setDeviceOnlineState(false, "本地网关服务未连接");
+      };
+      sse.addEventListener("device_connected", (e) => {
+        state.lastHeartbeatTime = Date.now();
+        setDeviceOnlineState(true);
+      });
+
+      sse.addEventListener("device_disconnected", (e) => {
+        setDeviceOnlineState(false, "物理短信棒已拔出");
+      });
+
+      sse.addEventListener("sms_received", (e) => {
+        try {
+          const sms = JSON.parse(e.data);
+          state.lastHeartbeatTime = Date.now();
+          setDeviceOnlineState(true);
+          state.smsList.unshift(sms);
+          state.smsTotal = (state.smsTotal || 0) + 1;
+          renderSmsList();
+          showToast(`📩 收到新短信: 来自 ${sms.phone || sms.sender}`, "success");
+          const otp = sms.otp || extractOtpClient(sms.content);
+          if (otp) {
+            updateOtpBanner(otp, sms.phone || sms.sender);
+            const autoCopy = document.getElementById("cfg_auto_copy_otp") ? document.getElementById("cfg_auto_copy_otp").checked : true;
+            if (autoCopy) {
+              copyText(otp, `⚡ 捕获新验证码并已自动复制: ${otp}`);
+            } else {
+              showToast(`⚡ 捕获新验证码: ${otp} (可在卡片上点击复制)`, "info");
+            }
+          }
+        } catch (err) {
+          console.error("处理 sms_received 异常:", err);
+        }
+      });
+
+      sse.addEventListener("call_incoming", (e) => {
+        try {
+          const call = JSON.parse(e.data);
+          state.lastHeartbeatTime = Date.now();
+          setDeviceOnlineState(true);
+          state.calls.unshift(call);
+          renderCalls();
+          showToast(`🚫 已自动拒接来电: ${call.phone}`, "error");
+        } catch (err) {}
+      });
+
+      sse.addEventListener("status_update", (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          renderStatus(data);
+        } catch (err) {}
+      });
+
+      sse.addEventListener("fota_status", (e) => {
+        try {
+          const fota = JSON.parse(e.data);
+          state.lastHeartbeatTime = Date.now();
+          if (fota.status === "checking") {
+            showToast(`⚡ 正在探测云端 FOTA 固件版本... (当前 v${fota.current_version || "1.2.0"})`, "info", 4000);
+          } else if (fota.status === "up_to_date") {
+            showToast(`✅ 固件当前已是最新版本 (v${fota.current_version})，无需更新`, "success", 4000);
+          } else if (fota.status === "downloading") {
+            showToast(`🚀 发现新版本 v${fota.target_version}！正在流式下载写入 Flash，稍后将自动重启...`, "warning", 8000);
+          } else if (fota.status === "success") {
+            showToast(`🎉 固件下载与校验成功！设备正在自愈重启以生效新固件...`, "success", 6000);
+          } else if (fota.status === "failed") {
+            showToast(`❌ 空中更新失败: ${fota.error || "未知异常"}`, "error", 5000);
+          }
+        } catch (err) {}
+      });
+    }
+
+    // 事件绑定
+    function setupEventListeners() {
+      // 复制顶栏最新验证码
+      if (el.topOtpPill) {
+        const handleCopyTopOtp = (e) => {
+          e.stopPropagation();
+          if (!state.latestOtp) {
+            showToast("暂未收到短信验证码", "info");
+            return;
+          }
+          copyText(state.latestOtp, `验证码已复制: ${state.latestOtp}`);
+          if (el.btnTopOtpCopy) {
+            el.btnTopOtpCopy.classList.add("copied");
+            if (el.topOtpCopyIcon) el.topOtpCopyIcon.textContent = "✓";
+            if (el.topOtpCopyText) el.topOtpCopyText.textContent = "已复制";
+            setTimeout(() => {
+              el.btnTopOtpCopy.classList.remove("copied");
+              if (el.topOtpCopyIcon) el.topOtpCopyIcon.textContent = "📋";
+              if (el.topOtpCopyText) el.topOtpCopyText.textContent = "复制";
+            }, 1500);
+          }
+        };
+
+        el.topOtpPill.addEventListener("click", handleCopyTopOtp);
+        el.topOtpPill.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            handleCopyTopOtp(e);
+          }
+        });
+      }
+
+      // 搜索过滤
+      el.searchSms.addEventListener("input", (e) => {
+        state.filterKeyword = e.target.value;
+        renderSmsList();
+      });
+
+      // 顶部设备连接徽章融合点击刷新
+      if (el.netBadge) {
+        el.netBadge.addEventListener("click", () => {
+          manualRefresh();
+        });
+        el.netBadge.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            manualRefresh();
+          }
+        });
+      }
+
+      // 短信收件箱滚动触底懒加载监听 (作为 IntersectionObserver 的双保险保底)
+      if (el.smsContainer) {
+        el.smsContainer.addEventListener("scroll", () => {
+          if (state.smsLoadingMore || !state.smsHasMore || state.filterKeyword) return;
+          const threshold = 160;
+          if (el.smsContainer.scrollHeight - el.smsContainer.scrollTop - el.smsContainer.clientHeight <= threshold) {
+            loadMoreSms();
+          }
+        });
+      }
+
+      // 刷新历史
+      el.btnRefreshHistory.addEventListener("click", () => {
+        refreshAll();
+        showToast("已刷新网关数据");
+      });
+
+      // 切换时间排序（最新优先 / 最早优先）
+      el.btnToggleSort.addEventListener("click", () => {
+        state.sortOrder = (state.sortOrder === "desc") ? "asc" : "desc";
+        updateSortButtonUI();
+        renderSmsList();
+        showToast(`短信排序已切换为: ${state.sortOrder === "desc" ? "最新优先（时间更晚在最前）" : "最早优先（时间更早在最前）"}`);
+      });
+
+      // 顶部手动刷新按钮
+      if (el.btnManualRefresh) {
+        el.btnManualRefresh.addEventListener("click", manualRefresh);
+      }
+
+      // 超时时间变更监听 (即选即生效)
+      if (el.cfgOfflineTimeout) {
+        el.cfgOfflineTimeout.addEventListener("change", (e) => {
+          const val = parseInt(e.target.value, 10) || 5;
+          state.offlineTimeoutSec = val;
+          localStorage.setItem("air780_offline_timeout_sec", String(val));
+          if (state.deviceOnline) {
+            el.netBadge.title = `4G 短信棒物理连接正常 (离线判定超时: ${state.offlineTimeoutSec}s)`;
+          }
+          scheduleNextHeartbeat();
+          showToast(`离线判定超时已更新为 ${val} 秒`, "success");
+        });
+      }
+
+      // 1. 蜂窝移动数据开关 (底层基石)
+      el.toggleData.addEventListener("change", async (e) => {
+        if (!state.deviceOnline) {
+          e.target.checked = false;
+          showToast("✕ 短信棒未连接，无法修改蜂窝网络设置", "error");
+          return;
+        }
+        const enable = e.target.checked;
+        el.toggleData.disabled = true;
+        const res = await apiFetch("/api/control/data", "POST", { enable });
+        el.toggleData.disabled = false;
+        if (res && res.ok) {
+          if (state.status) {
+            state.status.cellular_data = enable;
+            state.status.cellular_data_enable = enable;
+          }
+          // 移动数据关闭时，若 USB 网络共享先前开启，自动联动下发关闭 RNDIS
+          if (!enable && el.toggleRndis.checked) {
+            el.toggleRndis.checked = false;
+            apiFetch("/api/control/rndis", "POST", { enable: false });
+            if (state.status) {
+              state.status.rndis = false;
+              state.status.rndis_enable = false;
+            }
+          }
+          updateRndisAvailability();
+          showToast(`蜂窝移动数据已${enable ? "开启 (设备可独立联网)" : "关闭 (已恢复 0 流量免话费状态)"}`);
+        } else {
+          showToast(`切换蜂窝移动数据失败: ${res.error || "未知错误"}`, "error");
+          e.target.checked = !enable; // 回滚
+          updateRndisAvailability();
+        }
+      });
+
+      // 2. USB 网络共享开关 (依附于蜂窝移动数据)
+      el.toggleRndis.addEventListener("change", async (e) => {
+        if (!state.deviceOnline) {
+          e.target.checked = false;
+          showToast("✕ 短信棒未连接，无法开启 USB 网络共享", "error");
+          return;
+        }
+        // 二次防御：若移动数据未开启，禁止开启 USB 网络共享
+        if (!el.toggleData.checked) {
+          e.target.checked = false;
+          showToast("请先开启【蜂窝移动数据】，才可使用 USB 网络共享", "error");
+          return;
+        }
+
+        const enable = e.target.checked;
+        el.toggleRndis.disabled = true;
+        const res = await apiFetch("/api/control/rndis", "POST", { enable });
+        el.toggleRndis.disabled = false;
+        if (res && res.ok) {
+          if (state.status) {
+            state.status.rndis = enable;
+            state.status.rndis_enable = enable;
+          }
+          showToast(`USB 网络共享已${enable ? "开启 (电脑可通过插棒上网)" : "关闭 (已断开电脑 4G 连接)"}`);
+        } else {
+          showToast(`设置 USB 网络共享失败: ${res.error || "未知错误"}`, "error");
+          e.target.checked = !enable; // 回滚
+        }
+      });
+
+      // 软复位
+      el.btnReboot.addEventListener("click", async () => {
+        if (!state.deviceOnline) {
+          showToast("✕ 短信棒已断开连接，无法执行重启指令", "error");
+          return;
+        }
+        const confirmed = await showConfirm({
+          title: "重启设备",
+          desc: "确定要重启设备吗？设备将在 1~2 秒后自动重新联网连接。",
+          icon: "🔄",
+          confirmText: "立即重启",
+          type: "primary"
+        });
+        if (!confirmed) return;
+        const res = await apiFetch("/api/control/reboot", "POST", { reason: "web_ui_click" });
+        if (res && res.ok) {
+          showToast("重启指令已下发，设备正在重新启动中...");
+        } else {
+          showToast(`重启失败: ${res.error || "未知错误"}`, "error");
+        }
+      });
+
+      // 本机手机卡号点击直接复制 (页面无多余提示内容)
+      const cardSimPhone = document.getElementById("cardSimPhone");
+      if (cardSimPhone) {
+        cardSimPhone.addEventListener("click", () => {
+          const raw = (document.getElementById("simPhoneVal")?.textContent || "132 4383 2515").trim();
+          const cleanPhone = raw.replace(/\D/g, "") || "13800138000";
+          copyText(cleanPhone, `已复制手机号: ${cleanPhone}`);
+        });
+      }
+
+
+
+      // 清空黑匣子
+      el.btnClearHistory.addEventListener("click", async () => {
+        if (!state.deviceOnline) {
+          showToast("✕ 短信棒未连接，无法清空板载储存", "error");
+          return;
+        }
+        const confirmed = await showConfirm({
+          title: "清空短信记录",
+          desc: "确定要清空设备内已保存的所有短信记录吗？清空后无法恢复。",
+          icon: "🗑️",
+          confirmText: "清空记录",
+          type: "danger"
+        });
+        if (!confirmed) return;
+        const res = await apiFetch("/api/control/clear_history", "POST", {});
+        if (res && res.ok) {
+          state.smsList = [];
+          renderSmsList();
+          updateOtpBanner(null);
+          showToast("已成功清空所有本地短信记录");
+        } else {
+          showToast(`清空失败: ${res.error || "未知错误"}`, "error");
+        }
+      });
+
+      // 发短信模态弹窗打开/关闭
+      el.btnOpenSend.addEventListener("click", () => {
+        if (!state.deviceOnline) {
+          showToast("✕ 短信棒未插入或已断开，无法代发短信", "error");
+          return;
+        }
+        el.sendModal.classList.add("active");
+        el.sendPhone.focus();
+      });
+
+      const closeModal = () => el.sendModal.classList.remove("active");
+      el.btnCloseSend.addEventListener("click", closeModal);
+      el.btnCancelSend.addEventListener("click", closeModal);
+
+      el.sendContent.addEventListener("input", (e) => {
+        el.charCount.textContent = `${e.target.value.length} 字`;
+      });
+
+      // 确认发送短信
+      el.btnConfirmSend.addEventListener("click", async () => {
+        const phone = el.sendPhone.value.trim();
+        const content = el.sendContent.value.trim();
+        if (!phone) {
+          showToast("请输入目标手机号码", "error");
+          return;
+        }
+        if (!content) {
+          showToast("请输入短信内容", "error");
+          return;
+        }
+
+        el.btnConfirmSend.disabled = true;
+        el.btnConfirmSend.textContent = "正在发送短信...";
+
+        const res = await apiFetch("/api/sms/send", "POST", { phone, content });
+        el.btnConfirmSend.disabled = false;
+        el.btnConfirmSend.textContent = "立即发送";
+
+        if (res && res.ok) {
+          showToast(`短信已成功发出！`);
+          closeModal();
+          el.sendPhone.value = "";
+          el.sendContent.value = "";
+          el.charCount.textContent = "0 字";
+          setTimeout(refreshAll, 1500);
+        } else {
+          showToast(`发送失败: ${res.error || "射频超时"}`, "error");
+        }
+      });
+
+      // 配置抽屉打开与关闭
+      const openDrawer = () => {
+        loadConfigDrawerData();
+        el.configDrawerBackdrop.classList.add("active");
+      };
+      const closeDrawer = () => {
+        el.configDrawerBackdrop.classList.remove("active");
+      };
+
+      el.btnOpenConfigDrawer.addEventListener("click", openDrawer);
+      el.btnCloseConfigDrawer.addEventListener("click", closeDrawer);
+      el.btnCancelConfigDrawer.addEventListener("click", closeDrawer);
+
+      // 触发蜂窝空中热更新 FOTA
+      if (el.btnTriggerFota) {
+        el.btnTriggerFota.addEventListener("click", async () => {
+          showToast("正在向网关下发 FOTA 探测指令...", "info");
+          try {
+            const resp = await fetch("/api/control/fota", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ caller: "web_console" })
+            });
+            const res = await resp.json();
+            if (!res.ok) {
+              showToast(`触发失败: ${res.error || "未知错误"}`, "error");
+            }
+          } catch (err) {
+            showToast(`网络异常: ${err.message}`, "error");
+          }
+        });
+      }
+
+      // 保存配置抽屉
+      el.btnSaveConfigDrawer.addEventListener("click", async () => {
+        const cfg = gatherConfigDrawerData();
+        if (el.cfgOfflineTimeout) {
+          const val = parseInt(el.cfgOfflineTimeout.value, 10) || 5;
+          state.offlineTimeoutSec = val;
+          localStorage.setItem("air780_offline_timeout_sec", String(val));
+          if (state.deviceOnline) {
+            el.netBadge.title = `4G 短信棒物理连接正常 (离线判定超时: ${state.offlineTimeoutSec}s)`;
+          }
+          scheduleNextHeartbeat();
+        }
+
+        el.btnSaveConfigDrawer.disabled = true;
+        el.btnSaveConfigDrawer.textContent = "正在保存并热重载...";
+
+        const res = await apiFetch("/api/config/notify", "POST", cfg);
+        el.btnSaveConfigDrawer.disabled = false;
+        el.btnSaveConfigDrawer.textContent = "💾 保存并应用配置";
+
+        if (res && res.ok) {
+          const syncTip = res.board_synced ? "已同步写入板载硬件 Flash (fskv)" : "上位机已保存 (板端暂未连接)";
+          showToast(`配置已保存生效！${syncTip}`, "success");
+          closeDrawer();
+        } else {
+          showToast(`保存配置失败: ${res.error || "未知错误"}`, "error");
+        }
+      });
+    }
+
+    // 从表单收集 Webhook 配置对象
+    function gatherConfigDrawerData() {
+      const autoCopyEl = document.getElementById("cfg_auto_copy_otp");
+      return {
+        system: {
+          auto_copy_otp: autoCopyEl ? (autoCopyEl.checked ? 1 : 0) : 1
+        },
+        feishu: {
+          enable: document.getElementById("cfg_feishu_enable").checked ? 1 : 0,
+          url: document.getElementById("cfg_feishu_url").value.trim(),
+          secret: document.getElementById("cfg_feishu_secret").value.trim()
+        },
+        wecom: {
+          enable: document.getElementById("cfg_wecom_enable").checked ? 1 : 0,
+          url: document.getElementById("cfg_wecom_url").value.trim()
+        },
+        dingtalk: {
+          enable: document.getElementById("cfg_dingtalk_enable").checked ? 1 : 0,
+          url: document.getElementById("cfg_dingtalk_url").value.trim(),
+          secret: document.getElementById("cfg_dingtalk_secret").value.trim()
+        },
+        bark: {
+          enable: document.getElementById("cfg_bark_enable").checked ? 1 : 0,
+          url: document.getElementById("cfg_bark_url").value.trim(),
+          group: document.getElementById("cfg_bark_group").value.trim() || "Air780EPV",
+          sound: document.getElementById("cfg_bark_sound").value.trim() || "minuet"
+        },
+        webhook: {
+          enable: document.getElementById("cfg_webhook_enable").checked ? 1 : 0,
+          url: document.getElementById("cfg_webhook_url").value.trim()
+        }
+      };
+    }
+
+    // 读取并填充抽屉表单数据
+    async function loadConfigDrawerData() {
+      const savedTimeout = localStorage.getItem("air780_offline_timeout_sec") || "5";
+      if (el.cfgOfflineTimeout) el.cfgOfflineTimeout.value = savedTimeout;
+      state.offlineTimeoutSec = parseInt(savedTimeout, 10) || 5;
+
+      const res = await apiFetch("/api/config/notify");
+      if (res && res.ok && res.data) {
+        const c = res.data;
+        if (c.system && typeof c.system.auto_copy_otp !== "undefined") {
+          const autoCopyEl = document.getElementById("cfg_auto_copy_otp");
+          if (autoCopyEl) autoCopyEl.checked = !!c.system.auto_copy_otp;
+        }
+        if (c.feishu) {
+          document.getElementById("cfg_feishu_enable").checked = !!c.feishu.enable;
+          document.getElementById("cfg_feishu_url").value = c.feishu.url || "";
+          document.getElementById("cfg_feishu_secret").value = c.feishu.secret || "";
+        }
+        if (c.wecom) {
+          document.getElementById("cfg_wecom_enable").checked = !!c.wecom.enable;
+          document.getElementById("cfg_wecom_url").value = c.wecom.url || "";
+        }
+        if (c.dingtalk) {
+          document.getElementById("cfg_dingtalk_enable").checked = !!c.dingtalk.enable;
+          document.getElementById("cfg_dingtalk_url").value = c.dingtalk.url || "";
+          document.getElementById("cfg_dingtalk_secret").value = c.dingtalk.secret || "";
+        }
+        if (c.bark) {
+          document.getElementById("cfg_bark_enable").checked = !!c.bark.enable;
+          document.getElementById("cfg_bark_url").value = c.bark.url || "";
+          document.getElementById("cfg_bark_group").value = c.bark.group || "Air780EPV";
+          document.getElementById("cfg_bark_sound").value = c.bark.sound || "minuet";
+        }
+        if (c.webhook) {
+          document.getElementById("cfg_webhook_enable").checked = !!c.webhook.enable;
+          document.getElementById("cfg_webhook_url").value = c.webhook.url || "";
+        }
+      }
+    }
+
+    // 单渠道连通性测试 (Test Ping)
+    window.testChannel = async function(channel) {
+      const fb = document.getElementById(`feedback_${channel}`);
+      if (!fb) return;
+
+      const allCfg = gatherConfigDrawerData();
+      const channelCfg = allCfg[channel];
+      if (!channelCfg || !channelCfg.url) {
+        fb.className = "test-feedback show error";
+        fb.textContent = "✕ 请先填写 Webhook URL";
+        return;
+      }
+
+      fb.className = "test-feedback show loading";
+      fb.textContent = "⏳ 正在推流测试...";
+
+      try {
+        const res = await apiFetch("/api/config/notify/test", "POST", {
+          channel: channel,
+          config: channelCfg
+        });
+
+        if (res && res.ok) {
+          fb.className = "test-feedback show success";
+          fb.textContent = `✓ 连通正常 (HTTP ${res.status || 200}, ${res.cost_ms || 0}ms)`;
+        } else {
+          fb.className = "test-feedback show error";
+          fb.textContent = `✕ 失败: ${res.error || "请求超时"}`;
+        }
+      } catch (err) {
+        fb.className = "test-feedback show error";
+        fb.textContent = `✕ 错误: ${err.message}`;
+      }
+    };
+
+    // 初始化运行
+    window.addEventListener("DOMContentLoaded", () => {
+      setupEventListeners();
+      updateSortButtonUI();
+
+      const savedTimeout = localStorage.getItem("air780_offline_timeout_sec") || "5";
+      if (el.cfgOfflineTimeout) el.cfgOfflineTimeout.value = savedTimeout;
+      state.offlineTimeoutSec = parseInt(savedTimeout, 10) || 5;
+
+      refreshAll();
+      setupEventSource();
+
+      // 启动心跳守护与轮询看门狗
+      setInterval(checkHeartbeatWatchdog, 1000);
+      scheduleNextHeartbeat();
+    });
+  </script>
+</body>
+</html>

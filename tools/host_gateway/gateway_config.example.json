@@ -1,0 +1,30 @@
+{
+  "system": {
+    "auto_copy_otp": 1
+  },
+  "feishu": {
+    "enable": 1,
+    "url": "https://open.feishu.cn/open-apis/bot/v2/hook/YOUR_FEISHU_BOT_TOKEN",
+    "secret": ""
+  },
+  "wecom": {
+    "enable": 0,
+    "url": ""
+  },
+  "dingtalk": {
+    "enable": 0,
+    "url": "",
+    "secret": ""
+  },
+  "bark": {
+    "enable": 0,
+    "url": "",
+    "group": "Air780EPV",
+    "sound": "minuet"
+  },
+  "webhook": {
+    "enable": 0,
+    "url": "",
+    "method": "POST"
+  }
+}

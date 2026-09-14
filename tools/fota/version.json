@@ -1,0 +1,9 @@
+{
+  "project": "smart_cellular_gateway",
+  "version": "1.2.5",
+  "build_time": "2026-09-12 19:01:03",
+  "url": "http://your-bucket-domain.clouddn.com/script.bin",
+  "size": 19084,
+  "md5": "0003e7de7739ff57bc0dbed7181ed92e",
+  "changelog": "正式验证真机 FOTA 空中刷写与自动重启"
+}

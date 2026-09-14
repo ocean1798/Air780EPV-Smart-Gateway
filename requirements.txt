@@ -1,0 +1,13 @@
+# Air780EPV 智能随身通信网关依赖清单
+pyserial>=3.5
+pystray>=0.19.5
+Pillow>=10.0.0
+psutil>=5.9.0
+pywin32>=306; sys_platform == "win32"
+
+# AI Agent FastMCP 支持 (可选)
+fastmcp>=0.1.0
+
+# FOTA 固件空中发布与管理 (可选)
+qiniu>=7.12.0
+lzma; python_version < "3.3"

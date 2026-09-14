@@ -1,0 +1,48 @@
+# Third-party tools, caches and large binaries
+tools/Luatools/*
+!tools/Luatools/flash_smart_gateway.py
+tools/*.exe
+tools/*.zip
+references/
+.runtime/
+!dist/cellular-gateway.se-plugin
+
+# Sensitive configurations
+gateway_config.json
+**/gateway_config.json
+!gateway_config.example.json
+!**/gateway_config.example.json
+qiniu_config.json
+**/qiniu_config.json
+!tools/qiniu_config.example.json
+
+# Large dumps, captures & logs
+*.log
+**/*.log
+*.bin
+**/*.bin
+!deploy/core/*.bin
+*.pkg
+**/*.pkg
+*.pyz
+**/*.pyz
+
+# Build artifacts
+tools/host_gateway/build/
+tools/host_gateway/dist/
+tools/cluster_gateway/build/
+tools/cluster_gateway/dist/
+
+# Publishing and local tool configs
+tools/.github_remote.json
+tools/publish_config.json
+output/
+**/output/
+
+# OS / Python temporary
+__pycache__/
+**/__pycache__/
+*.pyc
+**/*.pyc
+.DS_Store
+Thumbs.db
