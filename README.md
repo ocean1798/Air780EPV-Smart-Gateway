@@ -12,9 +12,9 @@
 [![Desktop App](https://img.shields.io/badge/Desktop-Standalone%20Exe%20%2827MB%29-success.svg)](#quickstart)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/ocean1798/Air780EPV-Smart-Gateway/pulls)
 
-**全网通 4G 短信转发 | 电信 SMS over IMS | 智能验证码(OTP)提取 | 纯信令 0 流量保号 | AI Agent FastMCP 物理通信工具 | Windows 免安装独立桌面端**
+**4G短信转发飞书/企微/Bark/自定义webhook | 验证码提取直写剪贴板 | 随身上网 | 0流量外卡/保号卡支持 | Agent MCP 通信接入 | Windows 绿色便携上位机**
 
-[English Abstract](#english-abstract) • [方案对比](#comparison) • [兼容硬件](#hardware-compatibility) • [推送渠道](#push-channels) • [固件获取](#firmware-download) • [上位机使用与兼容性](#host-gateway) • [快速上手](#quickstart) • [API与MCP](#api-mcp) • [常见问题 FAQ](#faq)
+[English Abstract](#english-abstract) • [核心价值与场景](#core-values) • [方案对比](#comparison) • [兼容硬件](#hardware-compatibility) • [推送渠道](#push-channels) • [固件获取](#firmware-download) • [上位机使用与兼容性](#host-gateway) • [快速上手](#quickstart) • [API与MCP](#api-mcp) • [常见问题 FAQ](#faq)
 
 </div>
 
@@ -25,6 +25,29 @@
 
 > **Air780EPV-Smart-Gateway** is an industrial-grade, zero-traffic 4G Cat.1 cellular dongle & IoT communication gateway powered by Air780EPV (Cortex-M4F EC718P-V) and LuatOS.
 > It features **native VoLTE / SMS over IMS** (full China Telecom/Mobile/Unicom/CBN support), **broadband-priority proxy push with Push ACK** (0 cellular traffic consumed when connected to a host PC), **multi-channel notification dispatch** (Feishu/DingTalk/WeCom/Bark/Custom Webhook), **anti-OOM cursor pagination** for low-RAM microcontrollers, **FastMCP AI Agent physical communication integration**, and an out-of-the-box **standalone 27MB Windows desktop app**.
+
+---
+
+<a id="core-values"></a>
+## 💡 核心价值与三大典型场景
+
+为什么不在闲置手机上装转发 App，也不用市面上的普通短信猫？因为本项目是为追求**零干扰、零流量扣费、极简开箱即用**的真实工作场景而生的专用硬件网关：
+
+### 🎯 场景一：办公桌面提效神器（插上电脑，彻底告别翻手机）
+* **手机丢在包里不用管**：随身短信棒直接插在笔记本或台式机 USB 口上，来信实时推送到飞书、企业微信、钉钉或 Bark；
+* **验证码秒进剪贴板**：收到短信瞬间，算法自动剔除发件人尾号、客服电话、订单号等干扰，**0.1 秒内将纯净动态码直写 Windows 剪贴板**；
+* **手不离键盘即刻登录**：电脑屏幕右下角弹出通知的同时，双手无需离开键盘，直接按 `Ctrl + V` 瞬间完成验证登录，彻底治愈频繁拿手机解锁看短信的痛点；
+* **零配置绿色免装**：告别繁琐的 Python 环境与依赖库配置，单文件绿色版（27MB）双击即用，系统托盘静默常驻，支持端口漂移 1.5 秒无感自愈。
+
+### 🛡️ 场景二：境外卡 / 无流量保号卡救星（纯信令 0 流量，杜绝扣费停机）
+* **精准契合保号痛点**：许多用户持有香港卡（如 ClubSim）、海外卡、大王卡副卡或 5 元保号卡，平时仅用于接收注册验证码，**卡内根本未购买流量包，或国际漫游数据资费极其昂贵**；
+* **宿主宽带绝对优先**：只要短信棒插在电脑上且上位机运行，模组自身的 4G 蜂窝数据出厂**默认物理彻底掐死**。收到短信后，上位机强制借用电脑本地宽带/Wi-Fi 代推飞书或微信；
+* **Push ACK 闭环保障**：上位机代推成功后立即向模组回送回执注销定时器，**插电脑常年使用蜂窝数据消耗严格锁定为 0 字节，杜绝后台偷跑哪怕 1KB 流量导致欠费停机**；
+* **0 话费来电秒挂**：来电振铃 0.1 秒内纯信令硬切断通话（双方账单 0 费用），同时生成秒挂通知，让无语音通话套餐的保号卡也能安全感知来电。
+
+### ⚡ 场景三：4G 应急随身上网 & AI Agent 物理通信外设
+* **外出网络救急**：出差通勤、客户现场、会议室或家里临时宽带断网时，在 Web 管理界面一键开启 4G 随身上网（USB RNDIS 网卡），电脑即可秒变 4G 上网；
+* **赋予 AI 真实的通信肢体**：内置标准化 FastMCP 物理服务器，让 Claude Desktop、Cursor 等 AI 助手直接对接实体通信网络——支持调用 `wait_for_otp` 智能守候验证码（毫秒级精准唤醒，消解基站时延）、主动代发短信、监控硬件温度与信号。
 
 ---
 
