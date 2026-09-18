@@ -1,53 +1,51 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Air780EPV 智能随身通信网关 - 局域网 Web 控制台与管理服务
-基于 Python 原生轻量标准库 (http.server.ThreadingHTTPServer + socket + SSE) 实现
-对外提供 RESTful API 与实时事件流，无缝对接 127.0.0.1:17800 串口中枢。
-"""
-
-import sys
 import os
+import sys
 import time
 import json
 import socket
 import threading
 import queue
-import subprocess
 import argparse
+import base64
+import re
+from typing import Optional, Dict, Any, List
+from urllib.parse import urlparse, parse_qs
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
+
+# 引入 luadb_packer 打包引擎
+HOST_GATEWAY_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "host_gateway"))
+if HOST_GATEWAY_DIR not in sys.path:
+    sys.path.insert(0, HOST_GATEWAY_DIR)
+
+try:
+    import luadb_packer
+except ImportError:
+    luadb_packer = None
+
+try:
+    import firmware_flasher
+except ImportError:
+    firmware_flasher = None
+
 from urllib.parse import urlparse, parse_qs
 
-# 确保在 Windows 下标准输出为 UTF-8，且在 windowed 模式下有安全回退流
+# 端口与地址配置
+DEFAULT_WEB_HOST = "0.0.0.0"
+DEFAULT_WEB_PORT = 17801
+DEFAULT_HUB_HOST = "127.0.0.1"
+DEFAULT_HUB_PORT = 17800
+
 class _SafeStream:
-    def write(self, *args, **kwargs): pass
+    def write(self, msg): pass
     def flush(self): pass
-    def isatty(self): return False
 
 if sys.stdout is None:
     sys.stdout = _SafeStream()
 if sys.stderr is None:
     sys.stderr = _SafeStream()
 
-if sys.stdout and hasattr(sys.stdout, "reconfigure"):
-    try:
-        sys.stdout.reconfigure(encoding="utf-8")
-    except Exception:
-        pass
-if sys.stderr and hasattr(sys.stderr, "reconfigure"):
-    try:
-        sys.stderr.reconfigure(encoding="utf-8")
-    except Exception:
-        pass
 
-# 端口与地址常量
-DEFAULT_WEB_HOST = "0.0.0.0"
-DEFAULT_WEB_PORT = 17801
-DEFAULT_HUB_HOST = "127.0.0.1"
-DEFAULT_HUB_PORT = 17800
-
-# 路径常量
 def get_bundle_dir() -> str:
     """获取静态资源解压/打包根目录：PyInstaller 模式下读取 _MEIPASS"""
     if getattr(sys, 'frozen', False):
@@ -67,8 +65,39 @@ WEB_DIR = os.path.join(BUNDLE_DIR, "web")
 INDEX_HTML_PATH = os.path.join(WEB_DIR, "index.html")
 GATEWAY_CONFIG_PATH = os.path.join(DATA_DIR, "gateway_config.json")
 
-# 引入 Hub 的测试推送方法
+def parse_semver(ver_str: Any) -> tuple:
+    """提取 SemVer 版本号数字元组 (major, minor, patch)，彻底杜绝字符串字典序倒挂与前缀漏洞"""
+    if not ver_str or not isinstance(ver_str, str):
+        return (0, 0, 0)
+    nums = re.findall(r'\d+', ver_str)
+    return tuple(map(int, nums[:3])) if nums else (0, 0, 0)
+
+# 引入 Hub 的渠道测试函数与分舱存储引擎
 from gateway_hub import test_channel_push
+from storage_manager import StorageManager
+
+
+flashing_lock = threading.Lock()
+flashing_state = {
+    "is_flashing": False,
+    "slot": None,
+    "percent": 0,
+    "status": "idle",
+    "stage": "idle",
+    "error": None,
+    "start_time": 0
+}
+
+def update_flashing_progress(percent: int, status: str, stage: str = "flashing", error: str = None, slot: str = None):
+    with flashing_lock:
+        flashing_state["percent"] = percent
+        flashing_state["status"] = status
+        flashing_state["stage"] = stage
+        flashing_state["error"] = error
+        if slot:
+            flashing_state["slot"] = slot
+        if percent >= 100 or error:
+            flashing_state["is_flashing"] = False
 
 def _log(msg: str):
     if sys.stdout is not None:
@@ -79,8 +108,12 @@ def _log(msg: str):
             pass
 
 
+# =========================================================================
+# 核心类：HubBackendClient (与 17800 中枢通信的多卡槽客户端)
+# =========================================================================
+
 class HubBackendClient:
-    """与本地 127.0.0.1:17800 物理中枢通信的双向 TCP 客户端"""
+    """与本地 127.0.0.1:17800 多模组中枢通信的双向 TCP 客户端"""
 
     def __init__(self, host=DEFAULT_HUB_HOST, port=DEFAULT_HUB_PORT):
         self.host = host
@@ -94,27 +127,38 @@ class HubBackendClient:
         self.pending_requests = {}
         self.pending_lock = threading.Lock()
 
-        # 本地状态与历史缓存
-        self.is_hardware_connected: bool = False
-        self.latest_status = {
-            "online": False,
-            "csq": 0,
-            "rsrp": 0,
-            "temp": 0,
-            "vbat": 0,
-            "sms_count": 0,
-            "uptime": 0,
-            "model": "Air780EPV",
-            "rndis": False,
-            "cellular_data": False
-        }
-        self.recent_sms_events = []
-        self.recent_calls = []
+        # 多卡槽集群状态
+        self.slots: List[Dict[str, Any]] = []
+        self.active_slot: str = "slot_1"
+        self.storage_mgr = StorageManager(DATA_DIR)
+        self.synced_slots: Set[str] = set() # 记录已完成脱机同步收割的卡槽
+        self.latest_status: Dict[str, Any] = {}
+        self.latest_status_by_slot: Dict[str, Dict[str, Any]] = {}
+        self.recent_sms_events: List[Dict[str, Any]] = []
+        self.recent_sms_by_slot: Dict[str, List[Dict[str, Any]]] = {}
+        self.recent_calls: List[Dict[str, Any]] = []
+        self.recent_calls_by_slot: Dict[str, List[Dict[str, Any]]] = {}
+        self.call_status_by_slot: Dict[str, Dict[str, Any]] = {}
+        self.is_hardware_connected = False
         self.cache_lock = threading.Lock()
 
         # SSE 广播客户端队列列表
         self.sse_listeners = []
         self.sse_lock = threading.Lock()
+
+        # 方案 D: 读取本地内部免检 Session Token
+        self.internal_session_token = ""
+        self._load_session_token()
+
+    def _load_session_token(self):
+        """读取 Hub 生成在本地数据目录的内部免检令牌"""
+        try:
+            token_path = os.path.join(DATA_DIR, ".hub_session_token")
+            if os.path.exists(token_path):
+                with open(token_path, "r", encoding="utf-8") as f:
+                    self.internal_session_token = f.read().strip()
+        except Exception:
+            pass
 
     def start(self):
         self.running = True
@@ -134,7 +178,8 @@ class HubBackendClient:
                 self.sock = None
 
     def _auto_spawn_hub(self):
-        hub_path = os.path.join(BASE_DIR, "gateway_hub.py")
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        hub_path = os.path.join(base_dir, "gateway_hub.py")
         if not os.path.exists(hub_path):
             return
         _log(f"正在后台自拉起 gateway_hub.py 中枢: {hub_path}")
@@ -164,7 +209,13 @@ class HubBackendClient:
                     s.connect((self.host, self.port))
                     s.settimeout(None)
                     self.sock = s
-                    _log(f"已成功建立与物理中枢的连接: {self.host}:{self.port}")
+                    _log(f"已成功连接底层多设备通信中枢: {self.host}:{self.port}")
+                    # 建连成功后立即刷新读取一次 Session Token（防止 Hub 独立重启后换了新令牌）
+                    self._load_session_token()
+                    # 请求获取卡槽全量列表
+                    time.sleep(0.1)
+                    req_line = json.dumps({"type": "cmd", "cmd": "get_slots", "id": "init_slots", "token": self.internal_session_token, "source": "web"}) + "\n"
+                    self.sock.sendall(req_line.encode("utf-8"))
                     return True
                 except (ConnectionRefusedError, OSError):
                     if attempt == 1:
@@ -172,24 +223,127 @@ class HubBackendClient:
                     time.sleep(0.5)
             return False
 
-    def execute_cmd(self, cmd_name: str, params: dict = None, timeout: float = 8.0) -> dict:
-        """向 Hub 发送命令并同步等待返回"""
+    def _trigger_offline_sync(self, slot_id: str, iccid: str):
+        """触发模组脱机黑匣子短信异步拉取与 2PC 清理闭环 (审查 P1 修正)"""
+        clean_iccid = str(iccid or "").strip()
+        if not slot_id or not clean_iccid or clean_iccid == "sim_unknown":
+            return
+        with self.cache_lock:
+            if slot_id in self.synced_slots:
+                return
+            self.synced_slots.add(slot_id)
+
+        threading.Thread(target=self._run_offline_sync, args=(slot_id, clean_iccid), daemon=True).start()
+
+    def _run_offline_sync(self, slot_id: str, iccid: str):
+        _log(f"[{slot_id}] 检测到模组上线就绪，启动脱机黑匣子自动同步 (ICCID: {iccid})...")
+        time.sleep(1.0)  # 避开开机/插卡初始通信高频期
+        cursor = None
+        all_fetched = []
+        max_batches = 10  # 板端最多 100 条，每批 15 条，最多 7~8 批即可收割完毕
+        batch_count = 0
+
+        while batch_count < max_batches:
+            batch_count += 1
+            cmd_payload = {"limit": 15}
+            if cursor:
+                cmd_payload["cursor"] = cursor
+            resp = self.execute_cmd("get_history", params=cmd_payload, slot=slot_id, timeout=4.0)
+            if not resp.get("ok"):
+                break
+            raw_data = resp.get("data", {})
+            raw_items = raw_data.get("items") or raw_data.get("list") or []
+            if not raw_items:
+                break
+            all_fetched.extend(raw_items)
+            has_more = raw_data.get("has_more")
+            next_cur = raw_data.get("next_cursor")
+            has_more = bool(next_cur and str(next_cur) != "0")
+            if not has_more:
+                break
+            cursor = next_cur
+
+        if all_fetched:
+            _log(f"[{slot_id}] 成功拉取脱机短信 {len(all_fetched)} 条，增量写入本地 ICCID 分舱权威存储...")
+            comp = self.storage_mgr.get_compartment(iccid)
+            for it in all_fetched:
+                sender = it.get("from") or it.get("sender") or it.get("phone") or "未知号码"
+                content = it.get("content", "")
+                raw_time = it.get("time") or it.get("ts") or ""
+                ts = it.get("timestamp")
+                if ts is None:
+                    if isinstance(raw_time, (int, float)) and raw_time > 1000000000:
+                        ts = float(raw_time)
+                        time_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))
+                    elif isinstance(raw_time, str) and len(raw_time) >= 19:
+                        try:
+                            ts = time.mktime(time.strptime(raw_time[:19], "%Y-%m-%d %H:%M:%S"))
+                            time_str = raw_time[:19]
+                        except Exception:
+                            ts = time.time()
+                            time_str = raw_time
+                    else:
+                        ts = time.time()
+                        time_str = time.strftime("%Y-%m-%d %H:%M:%S")
+                else:
+                    ts = float(ts)
+                    time_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts)) if ts > 1000000000 else str(raw_time)
+
+                msg_id = it.get("id") or f"{slot_id}_{int(float(ts)*1000)}"
+                if comp.is_deleted(msg_id, sender, content, raw_time):
+                    continue
+
+                msg_obj = {
+                    "id": msg_id,
+                    "slot": slot_id,
+                    "iccid": iccid,
+                    "phone": sender,
+                    "sender": sender,
+                    "content": content,
+                    "otp": it.get("code") or it.get("otp") or "",
+                    "time": time_str,
+                    "timestamp": float(ts)
+                }
+                comp.append_message(msg_obj)
+
+            # 2PC 确认清理：上位机落盘成功后，下发 clear_history 让板端 LittleFS 恢复 0 占用
+            _log(f"[{slot_id}] 本地权威落盘成功，下发 clear_history 清空板端脱机暂存...")
+            self.execute_cmd("clear_history", slot=slot_id, timeout=3.0)
+            self.broadcast_sse("sms_received", {"slot": slot_id, "sync": True})
+
+    def execute_cmd(self, cmd_name: str, params: dict = None, slot: Optional[str] = None, timeout: float = 8.0, wait_terminal: bool = False) -> dict:
+        """向 Hub 下发指令并同步等待响应，支持定向指定目标卡槽 slot"""
         if not self._ensure_connected():
-            return {"ok": False, "error": "无法连接至物理通信中枢"}
+            return {"ok": False, "error": "无法连接底层通信中枢"}
 
         req_id = f"web_{int(time.time()*1000)}_{os.getpid()}"
         evt = threading.Event()
-        req_entry = {"event": evt, "response": None}
+        req_entry = {"event": evt, "response": None, "wait_terminal": wait_terminal, "cmd": cmd_name}
 
         with self.pending_lock:
             self.pending_requests[req_id] = req_entry
+
+        # 若未指定 slot，仅针对单板控制命令回退到 active_slot；对于 send_sms 等支持集群智能调度的命令保持 None
+        if slot:
+            target_slot = slot
+        elif cmd_name in ("send_sms", "get_cluster_overview", "get_cluster_health", "get_slots", "list_dongles"):
+            target_slot = None
+        else:
+            target_slot = self.active_slot or "slot_1"
 
         packet = {
             "type": "cmd",
             "id": req_id,
             "cmd": cmd_name,
-            "params": params or {}
+            "params": params or {},
+            "source": "web",
+            "token": getattr(self, "internal_session_token", "")
         }
+        if not packet["token"]:
+            self._load_session_token()
+            packet["token"] = getattr(self, "internal_session_token", "")
+        if target_slot:
+            packet["slot"] = target_slot
 
         try:
             line = json.dumps(packet, ensure_ascii=False) + "\n"
@@ -202,24 +356,22 @@ class HubBackendClient:
                 self.pending_requests.pop(req_id, None)
             return {"ok": False, "error": f"指令写入套接字失败: {e}"}
 
-        # 挂起等待响应
+        # 同步等待响应
         if evt.wait(timeout=timeout):
             resp = req_entry.get("response", {})
             return resp
         else:
             with self.pending_lock:
-                self.pending_requests.pop(req_id, None)
-            return {"ok": False, "error": f"等待中枢响应超时 ({timeout}s)"}
-
-    def send_raw_command(self, raw_line: str):
-        """向中枢发送一条原始字符串命令（非阻塞）"""
-        try:
-            line = raw_line.strip() + "\n"
-            with self.sock_lock:
-                if self.sock:
-                    self.sock.sendall(line.encode("utf-8"))
-        except Exception as e:
-            _log(f"发送原始命令失败: {e}")
+                entry = self.pending_requests.pop(req_id, None)
+            if entry and entry.get("queued"):
+                return {
+                    "ok": False,
+                    "code": -408,
+                    "msg": "UNKNOWN",
+                    "error": f"短信已进入发送队列，但在 {timeout}s 内未收到基站终态回执",
+                    "data": {"reason": "modem_result_timeout"}
+                }
+            return {"ok": False, "error": f"等待设备响应超时 ({timeout}s)"}
 
     def _rx_loop(self):
         buffer = ""
@@ -231,7 +383,7 @@ class HubBackendClient:
             try:
                 chunk = self.sock.recv(4096)
                 if not chunk:
-                    _log("与中枢套接字断开，准备重连...")
+                    _log("中枢套接字断开，准备重连...")
                     with self.sock_lock:
                         if self.sock:
                             try:
@@ -262,43 +414,62 @@ class HubBackendClient:
                         self.sock = None
                 time.sleep(1.0)
 
-    def _update_status_cache(self, event_data: dict):
-        """归一化更新最新网关状态缓存，确保 rndis 与 cellular_data 开关状态绝对双向同步"""
+    def _update_status_cache(self, event_data: dict, slot: str = ""):
+        """更新对应卡槽的状态缓存"""
         if not isinstance(event_data, dict):
             return
 
+        target_slot = slot or event_data.get("slot") or self.active_slot or "slot_1"
+
         with self.cache_lock:
-            # 同步 rndis 开关
+            if target_slot not in self.latest_status_by_slot:
+                self.latest_status_by_slot[target_slot] = {}
+            target_cache = self.latest_status_by_slot[target_slot]
+
             if "rndis" in event_data:
-                val = bool(event_data["rndis"])
-                self.latest_status["rndis"] = val
-                self.latest_status["rndis_enable"] = val
+                target_cache["rndis"] = bool(event_data["rndis"])
+                target_cache["rndis_enable"] = bool(event_data["rndis"])
             elif "rndis_enable" in event_data:
-                val = bool(event_data["rndis_enable"])
-                self.latest_status["rndis"] = val
-                self.latest_status["rndis_enable"] = val
+                target_cache["rndis"] = bool(event_data["rndis_enable"])
+                target_cache["rndis_enable"] = bool(event_data["rndis_enable"])
 
-            # 同步 cellular_data 开关
             if "cellular_data" in event_data:
-                val = bool(event_data["cellular_data"])
-                self.latest_status["cellular_data"] = val
-                self.latest_status["cellular_data_enable"] = val
+                target_cache["cellular_data"] = bool(event_data["cellular_data"])
+                target_cache["cellular_data_enable"] = bool(event_data["cellular_data"])
             elif "cellular_data_enable" in event_data:
-                val = bool(event_data["cellular_data_enable"])
-                self.latest_status["cellular_data"] = val
-                self.latest_status["cellular_data_enable"] = val
+                target_cache["cellular_data"] = bool(event_data["cellular_data_enable"])
+                target_cache["cellular_data_enable"] = bool(event_data["cellular_data_enable"])
 
-            # 同步其它各项硬件和网络指标
-            for k in ("model", "bsp", "csq", "rsrp", "temp", "vbat", "sms_count", "uptime", "lua_mem_kb", "version"):
+            for k in ("model", "bsp", "imei", "iccid", "csq", "rsrp", "temp", "vbat", "sms_count", "uptime", "lua_mem_kb", "version", "capabilities", "port"):
                 if k in event_data:
-                    self.latest_status[k] = event_data[k]
+                    target_cache[k] = event_data[k]
+            if "current_version" in event_data:
+                target_cache["version"] = event_data["current_version"]
             if "blackbox_count" in event_data:
-                self.latest_status["sms_count"] = event_data["blackbox_count"]
+                target_cache["sms_count"] = event_data["blackbox_count"]
             if "uptime_seconds" in event_data:
-                self.latest_status["uptime"] = event_data["uptime_seconds"]
+                target_cache["uptime"] = event_data["uptime_seconds"]
 
-            if "bsp" in event_data and "model" not in self.latest_status:
-                self.latest_status["model"] = event_data["bsp"]
+            if not target_cache.get("port"):
+                slot_info = next((s for s in self.slots if s.get("slot") == target_slot), None)
+                if slot_info and slot_info.get("port"):
+                    target_cache["port"] = slot_info["port"]
+
+            phone_val = event_data.get("phone") or event_data.get("number")
+            if phone_val and str(phone_val).strip():
+                target_cache["phone"] = str(phone_val).strip()
+                target_cache["number"] = str(phone_val).strip()
+            elif not target_cache.get("phone"):
+                slot_info = next((s for s in self.slots if s.get("slot") == target_slot), None)
+                if slot_info and slot_info.get("phone"):
+                    target_cache["phone"] = slot_info["phone"]
+                    target_cache["number"] = slot_info["phone"]
+
+            target_cache["slot"] = target_slot
+
+            # 如果当前活跃卡槽与 target_slot 一致，同步更新缺省缓存
+            if target_slot == self.active_slot:
+                self.latest_status.update(target_cache)
 
     def _dispatch_frame(self, raw_line: str):
         try:
@@ -307,56 +478,230 @@ class HubBackendClient:
             return
 
         frame_type = data.get("type")
+        frame_slot = data.get("slot") or "slot_1"
 
-        # 1. 响应帧 (兼容 LuatOS 标准 "res" 与上位机规范 "response")
+        # 1. 响应帧
         if frame_type in ("res", "response"):
-            req_id = data.get("id")
+            inner_data = data.get("data")
+            req_id = data.get("id") or (inner_data.get("id") if isinstance(inner_data, dict) else None)
             if req_id:
                 with self.pending_lock:
-                    entry = self.pending_requests.pop(req_id, None)
+                    entry = self.pending_requests.get(req_id)
                     if entry:
-                        # 归一化 ok 状态 (code == 0 或 ok is True)
-                        if "ok" not in data:
-                            data["ok"] = (data.get("code", 0) == 0)
-                        entry["response"] = data
+                        msg = data.get("msg") or (inner_data.get("msg", "") if isinstance(inner_data, dict) else "")
+                        code = data.get("code") if "code" in data else (inner_data.get("code", 0) if isinstance(inner_data, dict) else 0)
+                        if entry.get("wait_terminal") and code == 0 and msg == "QUEUED":
+                            entry["queued"] = True
+                            entry["intermediate"] = inner_data if isinstance(inner_data, dict) else data
+                            self.broadcast_sse("sms_status", {
+                                "id": req_id,
+                                "slot": frame_slot,
+                                "state": "QUEUED",
+                                "data": inner_data if isinstance(inner_data, dict) else {}
+                            })
+                            return
+
+                        self.pending_requests.pop(req_id, None)
+                        res_obj = dict(data)
+                        if "ok" not in res_obj:
+                            res_obj["ok"] = (code == 0)
+                        if isinstance(inner_data, dict):
+                            for k, v in inner_data.items():
+                                if k not in res_obj:
+                                    res_obj[k] = v
+                        entry["response"] = res_obj
                         entry["event"].set()
+
+            # 处理 get_slots 响应
+            if req_id == "init_slots" and data.get("ok"):
+                slots_data = data.get("data", {}).get("slots", [])
+                with self.cache_lock:
+                    self.slots = slots_data
+                    if self.slots and not any(s["slot"] == self.active_slot for s in self.slots):
+                        self.active_slot = self.slots[0]["slot"]
+                self.broadcast_sse("cluster_update", {"slots": self.slots, "active_slot": self.active_slot})
+
+            if data.get("ok"):
+                self.is_hardware_connected = True
 
         # 2. 事件广播帧
         elif frame_type == "event":
             event_name = data.get("event")
             event_data = data.get("data", {})
+            evt_slot = data.get("slot") or event_data.get("slot") or frame_slot
 
-            if event_name in ("status", "gateway_ready", "state_change"):
-                self._update_status_cache(event_data)
+            if event_name in ("cluster_status", "dongle_connected", "dongle_disconnected"):
+                # 会话池集群状态变动
+                if event_name == "cluster_status":
+                    self.slots = event_data.get("slots", [])
+                    # 尝试触发所有在线卡槽的脱机同步
+                    for s in self.slots:
+                        if s.get("online") and s.get("iccid"):
+                            self._trigger_offline_sync(s.get("slot"), s.get("iccid"))
+                elif event_name == "dongle_connected":
+                    # 增量添加或更新
+                    slot_id = event_data.get("slot")
+                    existing = [s for s in self.slots if s.get("slot") == slot_id]
+                    if existing:
+                        existing[0].update(event_data)
+                    else:
+                        self.slots.append(event_data)
+                    if event_data.get("iccid"):
+                        self._trigger_offline_sync(slot_id, event_data.get("iccid"))
+                elif event_name == "dongle_disconnected":
+                    slot_id = event_data.get("slot")
+                    for s in self.slots:
+                        if s.get("slot") == slot_id:
+                            s["online"] = False
+                    with self.cache_lock:
+                        self.synced_slots.discard(slot_id)
+
                 with self.cache_lock:
-                    status_snapshot = dict(self.latest_status)
+                    if self.slots and not any(s.get("slot") == self.active_slot and s.get("online") for s in self.slots):
+                        online_slots = [s for s in self.slots if s.get("online")]
+                        if online_slots:
+                            self.active_slot = online_slots[0]["slot"]
+
+                self.broadcast_sse("cluster_update", {"slots": self.slots, "active_slot": self.active_slot})
+
+            elif event_name in ("device_connected", "dongle_connected"):
+                self.is_hardware_connected = True
+                if event_data.get("iccid"):
+                    self._trigger_offline_sync(evt_slot, event_data.get("iccid"))
+                self.broadcast_sse("device_connected", {"online": True, "slot": evt_slot})
+
+            elif event_name in ("device_disconnected", "dongle_disconnected"):
+                with self.cache_lock:
+                    self.synced_slots.discard(evt_slot)
+                self.broadcast_sse("device_disconnected", {"online": False, "slot": evt_slot})
+
+            elif event_name in ("status", "gateway_ready", "state_change"):
+                self.is_hardware_connected = True
+                self._update_status_cache(event_data, slot=evt_slot)
+                if event_data.get("iccid"):
+                    self._trigger_offline_sync(evt_slot, event_data.get("iccid"))
+                with self.cache_lock:
+                    status_snapshot = dict(self.latest_status_by_slot.get(evt_slot, {}))
+                    s_info = next((s for s in self.slots if s.get("slot") == evt_slot), None)
+                    if s_info:
+                        s_info = dict(s_info)
+                status_snapshot["online"] = True
+                status_snapshot["slot"] = evt_slot
+                # 预先合并该卡槽的静态元数据 (imei, iccid, model, version, phone, port)，杜绝缺失字段推流导致前端闪烁
+                if s_info:
+                    for field in ("imei", "iccid", "model", "bsp", "version", "port"):
+                        if not status_snapshot.get(field) and s_info.get(field):
+                            status_snapshot[field] = s_info[field]
+                    if not status_snapshot.get("phone") and s_info.get("phone"):
+                        status_snapshot["phone"] = s_info["phone"]
+                        status_snapshot["number"] = s_info["phone"]
                 self.broadcast_sse("status_update", status_snapshot)
 
             elif event_name in ("sms_rx", "sms_received"):
-                # 归一化字段
+                self.is_hardware_connected = True
+                raw_time = event_data.get("time") or event_data.get("ts")
+                if isinstance(raw_time, (int, float)) and raw_time > 1000000000:
+                    time_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(raw_time))
+                elif raw_time:
+                    time_str = str(raw_time)
+                else:
+                    time_str = time.strftime("%Y-%m-%d %H:%M:%S")
+
+                sender_phone = event_data.get("from") or event_data.get("phone") or "未知号码"
+                with self.cache_lock:
+                    s_meta = next((s for s in self.slots if s.get("slot") == evt_slot), {})
+                    slot_phone = s_meta.get("phone") or s_meta.get("number")
+                    slot_model = s_meta.get("model") or s_meta.get("bsp")
+                    slot_iccid = s_meta.get("iccid") or self.latest_status_by_slot.get(evt_slot, {}).get("iccid") or "sim_unknown"
+
+                from storage_manager import derive_operator_and_badge
+                badge_info = derive_operator_and_badge(
+                    iccid=slot_iccid,
+                    my_phone=slot_phone,
+                    sender=sender_phone,
+                    content=event_data.get("content") or "",
+                    model=slot_model,
+                    slot=evt_slot
+                )
+
                 item = {
-                    "phone": event_data.get("from") or event_data.get("phone") or "未知号码",
+                    "slot": evt_slot,
+                    "phone": sender_phone,
                     "content": event_data.get("content") or "",
                     "otp": event_data.get("code") or event_data.get("otp"),
-                    "time": event_data.get("time") or time.strftime("%Y-%m-%d %H:%M:%S")
+                    "time": time_str,
+                    "operator": badge_info["operator"],
+                    "display_badge": badge_info["display_badge"],
+                    "slot_display": badge_info["display_badge"],
+                    "slot_label": badge_info["slot_label"]
                 }
+                # 审查建议 P1/P2: 实时短信立即落盘至本地 ICCID 权威存储分舱
+                try:
+                    active_iccid = slot_iccid
+                    comp = self.storage_mgr.get_compartment(active_iccid)
+                    storage_item = dict(item)
+                    storage_item["id"] = event_data.get("id") or event_data.get("msg_id") or f"{evt_slot}_{int(time.time()*1000)}"
+                    storage_item["timestamp"] = time.time()
+                    storage_item["iccid"] = active_iccid
+                    comp.append_message(storage_item)
+                except Exception as e:
+                    _log(f"实时短信落盘异常: {e}")
+
                 with self.cache_lock:
+                    if evt_slot not in self.recent_sms_by_slot:
+                        self.recent_sms_by_slot[evt_slot] = []
+                    self.recent_sms_by_slot[evt_slot].insert(0, item)
+                    if len(self.recent_sms_by_slot[evt_slot]) > 100:
+                        self.recent_sms_by_slot[evt_slot].pop()
+
                     self.recent_sms_events.insert(0, item)
-                    if len(self.recent_sms_events) > 100:
+                    if len(self.recent_sms_events) > 150:
                         self.recent_sms_events.pop()
+
                 self.broadcast_sse("sms_received", item)
 
             elif event_name in ("call_rx", "call_incoming"):
+                raw_time = event_data.get("time") or event_data.get("ts")
+                if isinstance(raw_time, (int, float)) and raw_time > 1000000000:
+                    time_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(raw_time))
+                elif raw_time:
+                    time_str = str(raw_time)
+                else:
+                    time_str = time.strftime("%Y-%m-%d %H:%M:%S")
+
                 item = {
+                    "slot": evt_slot,
                     "phone": event_data.get("from") or event_data.get("phone") or "未知号码",
-                    "time": event_data.get("time") or time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "time": time_str,
                     "action": event_data.get("action") or "rejected"
                 }
                 with self.cache_lock:
+                    if evt_slot not in self.recent_calls_by_slot:
+                        self.recent_calls_by_slot[evt_slot] = []
+                    self.recent_calls_by_slot[evt_slot].insert(0, item)
+                    if len(self.recent_calls_by_slot[evt_slot]) > 50:
+                        self.recent_calls_by_slot[evt_slot].pop()
+
                     self.recent_calls.insert(0, item)
-                    if len(self.recent_calls) > 50:
+                    if len(self.recent_calls) > 100:
                         self.recent_calls.pop()
+
                 self.broadcast_sse("call_incoming", item)
+
+            elif event_name == "call_status":
+                evt_slot = event_data.get("slot") or "slot_2"
+                with self.cache_lock:
+                    self.call_status_by_slot[evt_slot] = {
+                        "status": event_data.get("status", "IDLE"),
+                        "phone": event_data.get("phone", ""),
+                        "message": event_data.get("message", ""),
+                        "time": time.time()
+                    }
+                self.broadcast_sse("call_status", {"slot": evt_slot, "data": event_data})
+
+            elif event_name == "fota_status":
+                event_data["slot"] = evt_slot
+                self.broadcast_sse("fota_status", event_data)
 
     def register_sse_listener(self) -> queue.Queue:
         q = queue.Queue(maxsize=128)
@@ -369,6 +714,94 @@ class HubBackendClient:
             if q in self.sse_listeners:
                 self.sse_listeners.remove(q)
 
+    def perform_serial_ota(self, slot: str = "slot_1", progress_cb=None) -> dict:
+        """执行多模组集群定向卡槽串口分块流式热更新 (Serial SOTA)"""
+        if luadb_packer is None:
+            return {"ok": False, "error": "luadb_packer 模块未加载，无法执行打包"}
+
+        try:
+            if progress_cb:
+                progress_cb(5, "正在执行 Lua 静态语法预检与标准打包...", "packing")
+
+            manifest = luadb_packer.get_version_manifest()
+            target_ver = manifest.get("version", "1.2.7")
+
+            raw_luadb = luadb_packer.pack_luadb(target_version=target_ver)
+            sota_bytes, meta = luadb_packer.pack_sota_package(raw_luadb, target_version=target_ver)
+
+            total_len = len(sota_bytes)
+            chunk_size = 2048
+            chunks = [sota_bytes[i:i + chunk_size] for i in range(0, total_len, chunk_size)]
+            total_chunks = len(chunks)
+            sota_md5 = meta["package_md5"]
+
+            if progress_cb:
+                progress_cb(15, f"开始向卡槽 [{slot}] 启动 OTA 协商 (共 {total_chunks} 块, {total_len} 字节)...", "starting")
+
+            start_resp = self.execute_cmd("ota_start", {
+                "size": total_len,
+                "md5": sota_md5,
+                "total_chunks": total_chunks,
+                "chunk_size": chunk_size
+            }, slot=slot, timeout=8.0)
+
+            if not start_resp.get("ok"):
+                err = start_resp.get("msg") or start_resp.get("error") or "模组响应超时"
+                return {"ok": False, "error": f"模组拒绝启动 OTA: {err}"}
+
+            for idx, chunk in enumerate(chunks):
+                b64_str = base64.b64encode(chunk).decode("ascii")
+                pct = 15 + int((idx + 1) / total_chunks * 70)
+                if progress_cb:
+                    progress_cb(pct, f"正在灌流传输分块 [{idx + 1}/{total_chunks}]...", "flashing")
+
+                chunk_resp = self.execute_cmd("ota_chunk", {
+                    "index": idx,
+                    "data": b64_str
+                }, slot=slot, timeout=6.0)
+
+                if not chunk_resp.get("ok"):
+                    self.execute_cmd("ota_abort", {}, slot=slot, timeout=2.0)
+                    return {"ok": False, "error": f"分块 [{idx + 1}/{total_chunks}] 传输失败: {chunk_resp.get('msg')}"}
+
+            if progress_cb:
+                progress_cb(88, "分块传输完成，模组正在烧录 Flash 并校验 MD5...", "burning")
+
+            finish_resp = self.execute_cmd("ota_finish", {
+                "md5": sota_md5
+            }, slot=slot, timeout=20.0)
+
+            if not finish_resp.get("ok"):
+                return {"ok": False, "error": f"模组固件烧录失败: {finish_resp.get('msg') or finish_resp.get('error')}"}
+
+            if progress_cb:
+                progress_cb(92, "固件烧录完成！模组正在软重启与置换固件...", "rebooting")
+
+            # 缓冲等待模组重启（1.5s 后触发 rtos.reboot，USB 重举约 2~4 秒）
+            t_start = time.time()
+            reboot_detected = False
+            while time.time() - t_start < 15.0:
+                time.sleep(1.0)
+                status_resp = self.execute_cmd("get_status", {}, slot=slot, timeout=2.0)
+                if status_resp.get("ok") and status_resp.get("data"):
+                    d = status_resp["data"]
+                    curr_v = d.get("version") or d.get("firmware_version")
+                    if curr_v == target_ver:
+                        reboot_detected = True
+                        break
+
+            if not reboot_detected:
+                err_msg = f"模组升级重启超时 (15s)，未检测到新固件版本生效"
+                if progress_cb:
+                    progress_cb(95, err_msg, "failed")
+                return {"ok": False, "error": err_msg}
+
+            if progress_cb:
+                progress_cb(100, f"模组已成功平滑升级至 v{target_ver}！", "success")
+            return {"ok": True, "target_version": target_ver, "msg": f"热更新完成，模组已重启并上线 v{target_ver}"}
+        except Exception as e:
+            return {"ok": False, "error": f"热更新异常: {str(e)}"}
+
     def broadcast_sse(self, event_name: str, payload: dict):
         with self.sse_lock:
             listeners = list(self.sse_listeners)
@@ -379,46 +812,71 @@ class HubBackendClient:
                 pass
 
 
+# =========================================================================
+# Web 服务器：HTTP Handler 与线程池
+# =========================================================================
+
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
-    """支持每个连接多线程独立运行的 HTTP 服务器（关键：支持长期存活的 SSE 连接）"""
     daemon_threads = True
     allow_reuse_address = True
 
-
 class GatewayWebHandler(BaseHTTPRequestHandler):
-    """处理静态资产与 RESTful API 的 HTTP 请求处理器"""
-
-    backend: HubBackendClient = None  # 类级注入
+    server_version = "Air780ClusterWeb/2.0"
 
     def log_message(self, format, *args):
-        # 屏蔽原生琐碎的 access log，保持输出清晰
-        pass
+        """覆盖 BaseHTTPRequestHandler 的默认 stderr 输出，防止 windowed 模式下无控制台报错"""
+        if sys.stderr is not None and not isinstance(sys.stderr, _SafeStream):
+            try:
+                sys.stderr.write("%s - - [%s] %s\n" %
+                                 (self.address_string(),
+                                  self.log_date_time_string(),
+                                  format % args))
+                sys.stderr.flush()
+            except Exception:
+                pass
+
+    @property
+    def backend(self) -> HubBackendClient:
+        return self.server.backend
 
     def _send_cors_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
-    def do_OPTIONS(self):
-        self.send_response(204)
-        self._send_cors_headers()
-        self.end_headers()
-
-    def _send_json_resp(self, code: int, payload: dict):
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(code)
+    def _send_json_resp(self, status_code: int, data: dict):
+        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        self.send_response(status_code)
         self._send_cors_headers()
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self._send_cors_headers()
+        self.end_headers()
+
     def do_GET(self):
+        try:
+            self._handle_get()
+        except Exception as e:
+            import traceback
+            trace_str = traceback.format_exc()
+            _log(f"HTTP GET Error: {e}\n{trace_str}")
+            try:
+                self._send_json_resp(500, {"ok": False, "error": str(e), "trace": trace_str})
+            except Exception:
+                pass
+
+    def _handle_get(self):
         parsed = urlparse(self.path)
         path = parsed.path
         query = parse_qs(parsed.query)
+        target_slot = query.get("slot", [None])[0] or self.backend.active_slot or "slot_1"
 
-        # 1. 主页静态资产
+        # 1. 网页静态页面
         if path in ("/", "/index.html"):
             if os.path.exists(INDEX_HTML_PATH):
                 try:
@@ -435,7 +893,7 @@ class GatewayWebHandler(BaseHTTPRequestHandler):
                     self._send_json_resp(500, {"ok": False, "error": f"加载 index.html 失败: {e}"})
                     return
             else:
-                fallback_html = "<html><body><h1>Air780EPV 智能通信网关</h1><p>Web 资源未找到</p></body></html>".encode("utf-8")
+                fallback_html = "<html><body><h1>Air780 智能通信网关</h1><p>Web 资源未找到</p></body></html>".encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(fallback_html)))
@@ -443,42 +901,114 @@ class GatewayWebHandler(BaseHTTPRequestHandler):
                 self.wfile.write(fallback_html)
                 return
 
-        # 2. SSE 实时推流订阅接口
+        # 2. SSE 实时事件推送流接口
         if path == "/api/events":
             self.handle_sse_stream()
             return
 
-        # 3. 获取实时全景状态看板
-        if path == "/api/status":
-            if not self.backend.is_hardware_connected:
-                # 物理串口未连接，直接 0ms 快速响应离线态，杜绝发送 RPC 导致超时挂起
-                self._send_json_resp(200, {
-                    "ok": False,
-                    "online": False,
-                    "error": "4G 短信棒未插入或物理串口已断开",
-                    "data": {
-                        "online": False,
-                        "csq": 0,
-                        "rsrp": 0,
-                        "temp": 0,
-                        "vbat": 0,
-                        "sms_count": 0,
-                        "uptime": 0,
-                        "model": "Air780EPV",
-                        "rndis": False,
-                        "cellular_data": False
-                    }
-                })
-                return
+        # 2.9 未分配/全新模组嗅探接口 (AIR-35)
+        if path == "/api/flasher/unassigned":
+            resp = self.backend.execute_cmd("get_unassigned_dongles", timeout=2.0)
+            if resp.get("ok"):
+                unassigned = resp.get("data", {}).get("unassigned", [])
+                self._send_json_resp(200, {"ok": True, "unassigned": unassigned, "count": len(unassigned)})
+            else:
+                self._send_json_resp(200, {"ok": True, "unassigned": [], "count": 0})
+            return
 
-            resp = self.backend.execute_cmd("get_status", timeout=2.0)
-            if resp.get("ok") and resp.get("online") is not False:
+        # 3. 集群卡槽列表接口
+        if path == "/api/slots":
+            # 向中枢同步刷新一次最新卡槽
+            resp = self.backend.execute_cmd("get_slots", timeout=2.0)
+            if resp.get("ok"):
+                slots_data = resp.get("data", {}).get("slots", [])
+                with self.backend.cache_lock:
+                    self.backend.slots = slots_data
+            with self.backend.cache_lock:
+                slots_list = list(self.backend.slots)
+                act_slot = self.backend.active_slot
+            self._send_json_resp(200, {
+                "ok": True,
+                "slots": slots_list,
+                "active_slot": act_slot,
+                "count": len(slots_list)
+            })
+            return
+
+        # 3.1 全集群全景驾驶舱接口 (AIR-22)
+        if path == "/api/cluster/overview":
+            resp = self.backend.execute_cmd("get_cluster_overview", timeout=3.0)
+            if resp.get("ok"):
+                self._send_json_resp(200, {"ok": True, "data": resp.get("data")})
+            else:
+                self._send_json_resp(500, {"ok": False, "error": resp.get("error") or "获取集群概览失败"})
+            return
+
+        # 3.2 全集群健康监控状态机接口 (AIR-22)
+        if path == "/api/cluster/health":
+            resp = self.backend.execute_cmd("get_cluster_health", timeout=3.0)
+            if resp.get("ok"):
+                self._send_json_resp(200, {"ok": True, "data": resp.get("data")})
+            else:
+                self._send_json_resp(500, {"ok": False, "error": resp.get("error") or "获取集群健康数据失败"})
+            return
+
+        # 3.3 全集群防 OOM 复合游标聚合收件箱 (AIR-22)
+        if path == "/api/cluster/messages":
+            limit_val = 15
+            if "limit" in query:
+                try:
+                    limit_val = max(1, min(50, int(query["limit"][0])))
+                except Exception:
+                    pass
+            cursor_val = query.get("cursor", [None])[0]
+            slot_filter = query.get("slot", ["all"])[0]
+
+            slots_meta_map = {}
+            with self.backend.cache_lock:
+                for s in self.backend.slots:
+                    s_id = s.get("slot")
+                    if s_id:
+                        slots_meta_map[s_id] = s
+
+            res = self.backend.storage_mgr.get_aggregated_messages(
+                limit=limit_val,
+                cursor=cursor_val,
+                slot_filter=slot_filter,
+                slots_meta=slots_meta_map
+            )
+            self._send_json_resp(200, {"ok": True, "data": res})
+            return
+            return
+
+        # 4. 获取实时全局状态看板 (支持按 slot 路由)
+        if path == "/api/status":
+            resp = self.backend.execute_cmd("get_status", slot=target_slot, timeout=2.5)
+            if resp.get("ok"):
+                self.backend.is_hardware_connected = True
                 raw_data = resp.get("data", {})
                 rndis_val = raw_data.get("rndis") if "rndis" in raw_data else raw_data.get("rndis_enable", False)
                 data_val = raw_data.get("cellular_data") if "cellular_data" in raw_data else raw_data.get("cellular_data_enable", False)
+                sms_count_val = raw_data.get("blackbox_count") if "blackbox_count" in raw_data else raw_data.get("sms_count", 0)
+                iccid_val = raw_data.get("iccid", "")
+                if not iccid_val:
+                    with self.backend.cache_lock:
+                        for s in self.backend.slots:
+                            if s.get("slot") == target_slot and s.get("iccid"):
+                                iccid_val = s["iccid"]
+                                break
+                if iccid_val:
+                    comp = self.backend.storage_mgr.get_compartment(iccid_val)
+                    auth_cnt = len(comp.load_messages()) if comp else 0
+                    sms_count_val = max(int(sms_count_val or 0), auth_cnt)
+
                 norm_status = {
                     "online": True,
-                    "model": raw_data.get("bsp") or raw_data.get("model") or "Air780EPV",
+                    "slot": target_slot,
+                    "model": raw_data.get("bsp") or raw_data.get("model") or "Air780 Series",
+                    "imei": raw_data.get("imei", ""),
+                    "iccid": iccid_val,
+                    "version": raw_data.get("version") or raw_data.get("current_version") or "1.2.0",
                     "csq": raw_data.get("csq", 0),
                     "rsrp": raw_data.get("rsrp", 0),
                     "temp": raw_data.get("temp", 0),
@@ -487,451 +1017,746 @@ class GatewayWebHandler(BaseHTTPRequestHandler):
                     "rndis_enable": bool(rndis_val),
                     "cellular_data": bool(data_val),
                     "cellular_data_enable": bool(data_val),
-                    "sms_count": raw_data.get("blackbox_count") if "blackbox_count" in raw_data else raw_data.get("sms_count", 0),
+                    "sms_count": sms_count_val,
                     "uptime": raw_data.get("uptime_seconds") if "uptime_seconds" in raw_data else raw_data.get("uptime", 0),
                     "lua_mem_kb": raw_data.get("lua_mem_kb", 0),
+                    "capabilities": raw_data.get("capabilities", {}),
                     "raw": raw_data
                 }
-                self.backend.is_hardware_connected = True
-                self.backend._update_status_cache(norm_status)
-                self._send_json_resp(200, {"ok": True, "online": True, "data": norm_status})
+                self.backend._update_status_cache(norm_status, slot=target_slot)
+                self._send_json_resp(200, {"ok": True, "online": True, "slot": target_slot, "data": norm_status})
             else:
-                self.backend.is_hardware_connected = False
+                err_msg = resp.get("error") or resp.get("msg") or "模组未响应，物理设备已拔出"
                 with self.backend.cache_lock:
-                    self.backend.latest_status = {
-                        "online": False,
-                        "csq": 0,
-                        "rsrp": 0,
-                        "temp": 0,
-                        "vbat": 0,
-                        "sms_count": 0,
-                        "uptime": 0,
-                        "model": "Air780EPV",
-                        "rndis": False,
-                        "cellular_data": False
-                    }
-                self._send_json_resp(200, {
-                    "ok": False,
-                    "online": False,
-                    "error": resp.get("error", "4G 短信棒未插入或物理串口已断开"),
-                    "data": {
-                        "online": False,
-                        "csq": 0,
-                        "rsrp": 0,
-                        "temp": 0,
-                        "vbat": 0,
-                        "sms_count": 0,
-                        "uptime": 0,
-                        "model": "Air780EPV",
-                        "rndis": False,
-                        "cellular_data": False
-                    }
-                })
+                    cached = dict(self.backend.latest_status_by_slot.get(target_slot, {}))
+                cached["online"] = False
+                cached["slot"] = target_slot
+                self._send_json_resp(200, {"ok": False, "online": False, "slot": target_slot, "error": err_msg, "data": cached})
             return
 
-        # 4. 获取短信历史记录
+        # 5. 获取短信历史记录 (本地权威存储 + 服务端全文检索 + 复合游标懒加载)
         if path == "/api/history":
-            limit_val = 15
+            limit_val = 40
             if "limit" in query:
                 try:
-                    limit_val = max(1, min(50, int(query["limit"][0])))
+                    limit_val = max(1, min(100, int(query["limit"][0])))
                 except Exception:
                     pass
             cursor_val = query.get("cursor", [None])[0]
             kw = query.get("keyword", [None])[0]
-            order = query.get("order", ["desc"])[0].lower() # 默认时间降序 (最新在最前)
+            order = query.get("order", ["desc"])[0].lower()
+            requested_slot = query.get("slot", [None])[0]
 
-            board_limit = min(15, limit_val)
-            cmd_payload = {"limit": board_limit, "keyword": kw}
-            if cursor_val and str(cursor_val).strip() not in ("", "0", "null", "undefined"):
-                cmd_payload["cursor"] = str(cursor_val).strip()
+            slots_meta_map = {}
+            with self.backend.cache_lock:
+                for s in self.backend.slots:
+                    s_id = s.get("slot")
+                    if s_id:
+                        slots_meta_map[s_id] = s
 
-            resp = self.backend.execute_cmd("get_history", cmd_payload, timeout=6.0)
-            if resp.get("ok"):
-                raw_data = resp.get("data", {})
-                raw_items = raw_data.get("items") or raw_data.get("list") or []
-                total_cnt = raw_data.get("total", len(raw_items))
-                next_cur = raw_data.get("next_cursor")
-                has_more = bool(next_cur and next_cur != "0")
-                norm_items = []
-                for it in raw_items:
-                    sender = it.get("from") or it.get("sender") or it.get("phone") or "未知"
-                    time_raw = it.get("time") or it.get("ts") or ""
-                    if isinstance(time_raw, (int, float)) and time_raw > 1000000000:
-                        time_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time_raw))
-                    else:
-                        time_str = str(time_raw)
-                    norm_items.append({
-                        "phone": sender,
-                        "sender": sender,
-                        "content": it.get("content") or "",
-                        "otp": it.get("code") or it.get("otp"),
-                        "time": time_str
-                    })
-                # 板载 LittleFS 为正序追加存储，默认降序将最新记录排在最前
-                if order == "desc":
-                    norm_items.reverse()
-                
-                resp_payload = {
-                    "ok": True,
-                    "data": {
-                        "list": norm_items,
-                        "items": norm_items,
-                        "count": len(norm_items),
-                        "total": total_cnt,
-                        "next_cursor": next_cur,
-                        "has_more": has_more,
-                        "order": order
-                    },
-                    "list": norm_items,
-                    "items": norm_items,
-                    "count": len(norm_items),
-                    "total": total_cnt,
-                    "next_cursor": next_cur,
-                    "has_more": has_more
-                }
-                self._send_json_resp(200, resp_payload)
+            res = self.backend.storage_mgr.get_aggregated_messages(
+                limit=limit_val,
+                cursor=cursor_val,
+                slot_filter=requested_slot,
+                keyword=kw,
+                order=order,
+                slots_meta=slots_meta_map
+            )
+
+            self._send_json_resp(200, {
+                "ok": True,
+                "slot": requested_slot or "all",
+                "items": res["items"],
+                "list": res["items"],
+                "total": res["total"],
+                "count": res["count"],
+                "next_cursor": res["next_cursor"],
+                "has_more": res["has_more"],
+                "data": res
+            })
+            return
+
+        # 6. 获取来电拦截记录 (支持按 slot 路由)
+        if path == "/api/calls":
+            with self.backend.cache_lock:
+                calls = list(self.backend.recent_calls_by_slot.get(target_slot, []))
+            self._send_json_resp(200, {"ok": True, "slot": target_slot, "items": calls, "count": len(calls)})
+            return
+
+        # 6.1 获取通话状态 (AIR-30)
+        if path == "/api/call/status":
+            with self.backend.cache_lock:
+                status_info = getattr(self.backend, "call_status_by_slot", {}).get(target_slot, {"status": "IDLE"})
+            self._send_json_resp(200, {"ok": True, "slot": target_slot, "data": status_info})
+            return
+
+        # 7. 获取网关通用配置 (含通知与 MCP 开关)
+        if path in ("/api/config", "/api/config/notify"):
+            if os.path.exists(GATEWAY_CONFIG_PATH):
+                try:
+                    with open(GATEWAY_CONFIG_PATH, "r", encoding="utf-8") as f:
+                        cfg = json.load(f)
+                    self._send_json_resp(200, {"ok": True, "config": cfg, "data": cfg})
+                    return
+                except Exception as e:
+                    self._send_json_resp(500, {"ok": False, "error": f"读取配置失败: {e}"})
+                    return
             else:
-                # 回退提供内存接收事件
-                with self.backend.cache_lock:
-                    mem_list = list(self.backend.recent_sms_events)
-                if order == "asc":
-                    mem_list.reverse()
-                self._send_json_resp(200, {
-                    "ok": True,
-                    "data": {
-                        "list": mem_list,
-                        "items": mem_list,
-                        "count": len(mem_list),
-                        "total": len(mem_list),
-                        "next_cursor": None,
-                        "has_more": False,
-                        "order": order
-                    },
-                    "list": mem_list,
-                    "items": mem_list,
-                    "count": len(mem_list),
-                    "total": len(mem_list),
-                    "next_cursor": None,
-                    "has_more": False,
-                    "cached": True
-                })
+                self._send_json_resp(200, {"ok": True, "config": {}, "data": {}})
             return
 
-        # 5. 读取 Webhook 通知配置
-        if path == "/api/config/notify":
-            cfg = self._read_notify_config()
-            self._send_json_resp(200, {"ok": True, "data": cfg})
+        # 8. 获取固件版本与待更元数据信息 (AIR-29 / AIR-31 门禁加固)
+        if path == "/api/control/upgrade_info":
+            manifest = luadb_packer.get_version_manifest() if luadb_packer else {"version": "1.2.9", "changelog": "优化弱信号重连稳定性与长短信防重发", "size": 22400}
+            curr_slot_info = {}
+            with self.backend.cache_lock:
+                for s in self.backend.slots:
+                    if s.get("slot") == target_slot:
+                        curr_slot_info = s
+                        break
+            if not curr_slot_info:
+                resp = self.backend.execute_cmd("get_slots", timeout=1.5)
+                if resp.get("ok"):
+                    slots_data = resp.get("data", {}).get("slots", [])
+                    with self.backend.cache_lock:
+                        self.backend.slots = slots_data
+                    for s in slots_data:
+                        if s.get("slot") == target_slot:
+                            curr_slot_info = s
+                            break
+            current_ver = curr_slot_info.get("version") or ""
+            target_ver = manifest.get("version", "1.2.9")
+            model = curr_slot_info.get("model") or "Air780"
+            bsp = curr_slot_info.get("bsp") or model
+
+            # SemVer 严密数值判定：固件必须 >= 1.2.6 且支持串口 SOTA 协议栈
+            cur_tuple = parse_semver(current_ver)
+            target_tuple = parse_semver(target_ver)
+            sota_min_tuple = (1, 2, 6)
+
+            # 芯片架构匹配：当前 SOTA 包由 deploy/smart-gateway-780epv 生成，针对 EC718PV 架构
+            is_epv = "EPV" in model.upper() or "EC718" in bsp.upper() or "EPV" in bsp.upper()
+
+            if cur_tuple == (0, 0, 0) or not current_ver:
+                sota_supported = False
+                has_update = False
+                upgrade_method = "无法热更 (未检测到固件版本)"
+                tip = "未读取到模组固件版本，请确认设备是否正常在线"
+            elif cur_tuple >= target_tuple:
+                # 已是最新固件（或更高版本），无论什么芯片架构，绝不谎报 has_update
+                has_update = False
+                if is_epv:
+                    sota_supported = True
+                    upgrade_method = "本地串口极速热更 (已是最新固件)"
+                    tip = ""
+                else:
+                    sota_supported = False
+                    upgrade_method = f"已是最新版本 ({model} 专属固件)"
+                    tip = f"当前模组为 {model} (EC618 纯数传平台)，已运行最新专属固件 v{current_ver}。如需重装请使用【重新刷机控制台】。"
+            elif cur_tuple < sota_min_tuple:
+                sota_supported = False
+                has_update = True
+                upgrade_method = "物理线刷 (旧版本固件需首次线刷)"
+                tip = f"当前固件 (v{current_ver}) 较早，尚未内置串口极速热更桩。请使用【重新刷机控制台】升级至最新版。"
+            elif not is_epv and "780E" in model.upper():
+                sota_supported = False
+                has_update = True
+                upgrade_method = "物理线刷 (芯片平台专属镜像)"
+                tip = f"检测到新版本 v{target_ver}。当前模组为 {model} (EC618 纯数传平台)，与 EPV 在线热更镜像互斥，请使用【重新刷机控制台】线刷更新。"
+            else:
+                sota_supported = True
+                has_update = True
+                upgrade_method = "本地串口极速热更 (0流量·保留所有短信)"
+                tip = ""
+
+            self._send_json_resp(200, {
+                "ok": True,
+                "slot": target_slot,
+                "model": model,
+                "current_version": current_ver or "未知",
+                "target_version": target_ver,
+                "has_update": has_update,
+                "sota_supported": sota_supported,
+                "tip": tip,
+                "changelog": manifest.get("changelog", "常规稳定性优化"),
+                "size_kb": round(manifest.get("size", 22400) / 1024, 1),
+                "upgrade_method": upgrade_method
+            })
             return
 
-        # 404
-        self._send_json_resp(404, {"ok": False, "error": "Not Found"})
+        self._send_json_resp(404, {"ok": False, "error": "接口不存在"})
+
+    @staticmethod
+    def _format_error_message(resp: dict) -> str:
+        if not isinstance(resp, dict):
+            return "未知错误"
+        code = resp.get("code")
+        msg = str(resp.get("msg", "")).strip()
+        data_sec = resp.get("data") if isinstance(resp.get("data"), dict) else {}
+        reason = data_sec.get("reason", "")
+
+        if code == -409 or msg == "SMS_RESULT_UNKNOWN" or reason == "previous_modem_result_pending":
+            return "上一条短信发送结果未决，设备已处于保护状态，请稍后重试或重置状态"
+        if code == -429 or msg == "QUEUE_FULL":
+            return "短信发送队列已满，请等待前序短信处理完成"
+        if code == -101 or msg == "PARAM_ERR":
+            return "短信参数错误：手机号码或短信内容不能为空"
+        if code == -102 or msg == "SEND_FAILED":
+            return "模组底层射频发射失败"
+        if code == -408 or msg == "UNKNOWN" or reason == "modem_result_timeout":
+            return "等待模组发送结果超时，结果未知"
+        if code == -1 or msg == "SENT_FAILED":
+            return "基站发送失败"
+
+        return resp.get("error") or msg or reason or f"请求失败 (错误码: {code})"
 
     def do_POST(self):
         parsed = urlparse(self.path)
         path = parsed.path
+        query = parse_qs(parsed.query)
 
-        # 读取请求体 JSON
         content_len = int(self.headers.get("Content-Length", 0))
-        post_data = {}
+        body = {}
         if content_len > 0:
+            raw_body = self.rfile.read(content_len)
             try:
-                raw_bytes = self.rfile.read(content_len)
-                post_data = json.loads(raw_bytes.decode("utf-8"))
-            except Exception as e:
-                self._send_json_resp(400, {"ok": False, "error": f"JSON 解析失败: {e}"})
-                return
+                body = json.loads(raw_body.decode("utf-8"))
+            except Exception:
+                pass
 
-        # 1. 主动代发 4G 短信
+        qs_slot = query.get("slot", [None])[0]
+        target_slot = qs_slot or body.get("slot") or self.backend.active_slot or "slot_1"
+
+        # 1. 切换前端当前活跃卡槽
+        if path == "/api/slots/switch":
+            new_slot = body.get("slot")
+            if not new_slot:
+                self._send_json_resp(400, {"ok": False, "error": "必须提供目标 slot"})
+                return
+            with self.backend.cache_lock:
+                self.backend.active_slot = new_slot
+            _log(f"用户已切换当前活跃卡槽 -> 【{new_slot}】")
+            self.backend.broadcast_sse("cluster_update", {"slots": self.backend.slots, "active_slot": new_slot})
+            self._send_json_resp(200, {"ok": True, "active_slot": new_slot})
+            return
+
+        # 2. 发送短信 (支持定向卡槽与集群智能路由分流 AIR-22)
         if path == "/api/sms/send":
-            phone = str(post_data.get("phone", "")).strip()
-            content = str(post_data.get("content", "")).strip()
+            phone = (body.get("phone") or "").strip()
+            content = (body.get("content") or "").strip()
+            strategy = (body.get("strategy") or "operator_affinity").strip()
+            dry_run = bool(body.get("dry_run", False))
             if not phone or not content:
-                self._send_json_resp(400, {"ok": False, "error": "phone 和 content 不能为空"})
+                self._send_json_resp(400, {"ok": False, "error": "手机号与正文不能为空"})
                 return
-            resp = self.backend.execute_cmd("send_sms", {"to": phone, "text": content, "phone": phone, "content": content}, timeout=12.0)
-            if resp.get("ok"):
-                self._send_json_resp(200, {"ok": True, "data": resp.get("data", {})})
+
+            # 区分 direct 与 auto 契约：显式传 slot 则为 direct；未传或为 auto 则为 None
+            specified_slot = body.get("slot")
+            if specified_slot in ("", "auto", None):
+                target_slot = None
             else:
-                self._send_json_resp(500, {"ok": False, "error": resp.get("error", "发送短信超时")})
+                target_slot = str(specified_slot).strip()
+
+            wait_term = body.get("wait_terminal", False)
+            resp = self.backend.execute_cmd(
+                "send_sms",
+                params={"phone": phone, "content": content, "strategy": strategy, "slot": target_slot, "dry_run": dry_run},
+                slot=target_slot,
+                timeout=12.0,
+                wait_terminal=wait_term and not dry_run
+            )
+            if resp.get("ok"):
+                used_slot = resp.get("slot") or target_slot or "slot_1"
+                self._send_json_resp(200, {
+                    "ok": True,
+                    "slot": used_slot,
+                    "status": "routed" if dry_run else ("sent" if resp.get("msg") in ("SENT_OK", "SENT") else "queued"),
+                    "strategy": resp.get("routed_strategy") or strategy,
+                    "fallback": resp.get("fallback_used", False),
+                    "panic_mode": resp.get("panic_mode", False),
+                    "msg": resp.get("msg", "SENT_OK"),
+                    "data": resp.get("data")
+                })
+            else:
+                err_msg = self._format_error_message(resp)
+                self._send_json_resp(500, {"ok": False, "slot": target_slot, "error": err_msg, "code": resp.get("code")})
             return
 
-        # 2. 开关 USB 随身上网 RNDIS
+        # 2.1 重置短信队列与发送保护状态
+        if path == "/api/sms/reset":
+            resp = self.backend.execute_cmd("reset_sms", params={}, slot=target_slot, timeout=5.0)
+            if resp.get("ok"):
+                self._send_json_resp(200, {"ok": True, "slot": target_slot, "msg": "短信发送状态已重置", "data": resp.get("data")})
+            else:
+                err_msg = self._format_error_message(resp)
+                self._send_json_resp(500, {"ok": False, "slot": target_slot, "error": err_msg, "code": resp.get("code")})
+            return
+
+        # 3. 控制 RNDIS 开关 (支持定向卡槽)
         if path == "/api/control/rndis":
-            enable = bool(post_data.get("enable", False))
-            resp = self.backend.execute_cmd("set_rndis", {"enable": enable}, timeout=5.0)
+            enable = bool(body.get("enable", False))
+            resp = self.backend.execute_cmd("set_rndis", params={"enable": enable}, slot=target_slot, timeout=6.0)
             if resp.get("ok"):
-                self.backend._update_status_cache({"rndis": enable, "rndis_enable": enable})
                 with self.backend.cache_lock:
-                    status_snapshot = dict(self.backend.latest_status)
-                self.backend.broadcast_sse("status_update", status_snapshot)
-                self._send_json_resp(200, {"ok": True, "data": resp.get("data", {})})
+                    if target_slot not in self.backend.latest_status_by_slot:
+                        self.backend.latest_status_by_slot[target_slot] = {}
+                    self.backend.latest_status_by_slot[target_slot]["rndis"] = enable
+                    self.backend.latest_status_by_slot[target_slot]["rndis_enable"] = enable
+                self._send_json_resp(200, {"ok": True, "slot": target_slot, "rndis": enable, "msg": "RNDIS 配置已更新"})
             else:
-                self._send_json_resp(500, {"ok": False, "error": resp.get("error", "切换随身上网失败")})
+                self._send_json_resp(200, {"ok": False, "slot": target_slot, "error": resp.get("error") or "RNDIS 切换失败"})
             return
 
-        # 3. 开关板载 4G 蜂窝数据
+        # 4. 控制板载蜂窝数据开关 (支持定向卡槽)
         if path == "/api/control/data":
-            enable = bool(post_data.get("enable", False))
-            resp = self.backend.execute_cmd("set_cellular_data", {"enable": enable}, timeout=5.0)
+            enable = bool(body.get("enable", False))
+            resp = self.backend.execute_cmd("set_cellular_data", params={"enable": enable}, slot=target_slot, timeout=6.0)
             if resp.get("ok"):
-                self.backend._update_status_cache({"cellular_data": enable, "cellular_data_enable": enable})
                 with self.backend.cache_lock:
-                    status_snapshot = dict(self.backend.latest_status)
-                self.backend.broadcast_sse("status_update", status_snapshot)
-                self._send_json_resp(200, {"ok": True, "data": resp.get("data", {})})
+                    if target_slot not in self.backend.latest_status_by_slot:
+                        self.backend.latest_status_by_slot[target_slot] = {}
+                    self.backend.latest_status_by_slot[target_slot]["cellular_data"] = enable
+                    self.backend.latest_status_by_slot[target_slot]["cellular_data_enable"] = enable
+                self._send_json_resp(200, {"ok": True, "slot": target_slot, "cellular_data": enable, "msg": "蜂窝数据配置已更新"})
             else:
-                self._send_json_resp(500, {"ok": False, "error": resp.get("error", "切换蜂窝数据失败")})
+                self._send_json_resp(200, {"ok": False, "slot": target_slot, "error": resp.get("error") or "蜂窝数据切换失败"})
             return
 
-        # 4. 安全软复位重启网关
+        # 5. 软重启模组 (支持定向卡槽)
         if path == "/api/control/reboot":
-            reason = str(post_data.get("reason", "web_action"))
-            resp = self.backend.execute_cmd("reboot", {"reason": reason}, timeout=4.0)
-            self._send_json_resp(200, {"ok": True, "data": resp.get("data", {})})
+            reason = body.get("reason", "web_console_action")
+            resp = self.backend.execute_cmd("reboot", params={"reason": reason}, slot=target_slot, timeout=3.0)
+            self._send_json_resp(200, {"ok": True, "slot": target_slot, "msg": "重启指令已成功下发至网关"})
             return
 
-        # 5. 清空脱机黑匣子短信
-        if path == "/api/control/clear_history":
-            resp = self.backend.execute_cmd("clear_history", {}, timeout=5.0)
-            if resp.get("ok"):
-                self._send_json_resp(200, {"ok": True, "data": resp.get("data", {})})
-            else:
-                self._send_json_resp(500, {"ok": False, "error": resp.get("error", "清空记录失败")})
-            return
+        # 5.1 发起 VoLTE 电话拨号呼叫 (AIR-30)
+        if path == "/api/call/dial":
+            phone = (body.get("phone") or body.get("number") or "").strip()
+            timeout_sec = int(body.get("timeout") or body.get("timeout_seconds") or 15)
+            hangup_on_ans = bool(body.get("hangup_on_answer", True))
 
-        # 6. 保存 Webhook 通知配置并同步下发板端持久化
-        if path == "/api/config/notify":
-            if not isinstance(post_data, dict):
-                self._send_json_resp(400, {"ok": False, "error": "参数必须为 JSON 对象"})
+            if not phone:
+                self._send_json_resp(400, {"ok": False, "error": "目标手机号不能为空"})
                 return
-            saved_cfg = self._save_notify_config(post_data)
-            # 1. 触发上位机 Hub 重新加载内存中的通知配置
-            self.backend.send_raw_command(json.dumps({"cmd": "reload_notify_config"}))
-            
-            # 2. 串口下发给板端，持久化写入板载 LittleFS fskv
-            board_synced = False
-            try:
-                board_resp = self.backend.execute_cmd("set_notify_config", saved_cfg, timeout=3.5)
-                if board_resp and board_resp.get("ok"):
-                    board_synced = True
-                    _log("Webhook 配置已成功下发至板端 LittleFS fskv 持久化")
-                else:
-                    _log(f"下发板端配置超时或未响应: {board_resp}")
-            except Exception as e:
-                _log(f"下发板端指令异常: {e}")
 
+            resp = self.backend.execute_cmd(
+                "call_dial",
+                params={"phone": phone, "timeout": timeout_sec, "hangup_on_answer": hangup_on_ans, "slot": target_slot},
+                slot=target_slot,
+                timeout=8.0
+            )
+            if resp.get("ok"):
+                used_slot = resp.get("slot") or target_slot or "slot_2"
+                self._send_json_resp(200, {
+                    "ok": True,
+                    "slot": used_slot,
+                    "status": "DIALING",
+                    "timeout": timeout_sec,
+                    "msg": f"正在向 {phone} 发起 VoLTE 呼叫，{timeout_sec}秒后自动挂断（防扣费）",
+                    "data": resp.get("data")
+                })
+            else:
+                err_msg = resp.get("error") or self._format_error_message(resp)
+                self._send_json_resp(400 if ("HARDWARE_UNSUPPORTED" in str(resp) or "NO_VOLTE_SLOT" in str(resp)) else 500, {
+                    "ok": False,
+                    "slot": target_slot,
+                    "error": err_msg,
+                    "code": resp.get("code")
+                })
+            return
+
+        # 5.2 手动挂断当前呼叫 (AIR-30)
+        if path == "/api/call/hangup":
+            resp = self.backend.execute_cmd("call_hangup", slot=target_slot, timeout=4.0)
             self._send_json_resp(200, {
-                "ok": True,
-                "data": saved_cfg,
-                "board_synced": board_synced,
-                "message": "配置已保存并同步写入板载硬件存储 (fskv)" if board_synced else "配置已保存至上位机（板端未响应）"
+                "ok": resp.get("ok", False),
+                "slot": target_slot,
+                "msg": "已执行挂断指令" if resp.get("ok") else (resp.get("error") or "挂断失败")
             })
             return
 
-        # 7. 连通性测试 (Test Ping)
-        if path == "/api/config/notify/test":
-            channel = post_data.get("channel", "")
-            cfg = post_data.get("config", {})
-            if not channel or not isinstance(cfg, dict):
-                self._send_json_resp(400, {"ok": False, "error": "缺少 channel 或 config 参数"})
-                return
-            res = test_channel_push(channel, cfg)
-            if res.get("ok"):
-                self._send_json_resp(200, res)
+        # 6. 触发空中 FOTA 更新 (支持定向卡槽)
+        if path == "/api/control/fota":
+            resp = self.backend.execute_cmd("trigger_fota", slot=target_slot, timeout=6.0)
+            if resp.get("ok"):
+                self._send_json_resp(200, {"ok": True, "slot": target_slot, "msg": "已触发板卡 FOTA 固件检测"})
             else:
-                self._send_json_resp(400, res)
+                self._send_json_resp(200, {"ok": False, "slot": target_slot, "error": resp.get("error") or "FOTA 触发失败"})
             return
 
-        self._send_json_resp(404, {"ok": False, "error": "Not Found"})
+        # 6.1 删除单条短信 (支持墓碑持久化)
+        if path == "/api/control/delete_sms":
+            msg_id = body.get("id")
+            sender = body.get("sender") or body.get("phone") or ""
+            content = body.get("content") or ""
+            sms_time = body.get("time") or ""
+            active_iccid = body.get("iccid")
+            if not active_iccid:
+                with self.backend.cache_lock:
+                    s_meta = next((s for s in self.backend.slots if s.get("slot") == target_slot), {})
+                    active_iccid = s_meta.get("iccid")
+            comp = self.backend.storage_mgr.get_compartment(active_iccid)
+            succ = comp.add_tombstone(msg_id, sender, content, sms_time)
+            self._send_json_resp(200, {
+                "ok": True,
+                "slot": target_slot,
+                "msg": "已从本地归档移除并生成墓碑记录" if succ else "已记录删除墓碑"
+            })
+            return
 
-    def _read_notify_config(self) -> dict:
-        """读取通知配置，优先读本地 json，次选从板端 fskv 读取，最终回退至 config.lua"""
-        default_cfg = {
-            "feishu": {"enable": 0, "url": "", "secret": ""},
-            "wecom": {"enable": 0, "url": ""},
-            "dingtalk": {"enable": 0, "url": "", "secret": ""},
-            "bark": {"enable": 0, "url": "", "group": "Air780EPV", "sound": "minuet"},
-            "webhook": {"enable": 0, "url": "", "method": "POST"}
-        }
-        if os.path.exists(GATEWAY_CONFIG_PATH):
-            try:
-                with open(GATEWAY_CONFIG_PATH, "r", encoding="utf-8") as f:
-                    loaded = json.load(f)
-                for k, v in loaded.items():
-                    if k in default_cfg and isinstance(v, dict):
-                        default_cfg[k].update(v)
-                return default_cfg
-            except Exception as e:
-                _log(f"读取 gateway_config.json 失败: {e}")
+        # 10. 串口分块平滑热更 (AIR-29 Serial SOTA / AIR-31 门禁防呆)
+        if path == "/api/control/upgrade_script":
+            action_slot = target_slot
 
-        # 次选：若本地没有配置，尝试向板端请求 get_notify_config (换机即插即读)
-        try:
-            board_resp = self.backend.execute_cmd("get_notify_config", {}, timeout=2.0)
-            if board_resp and board_resp.get("ok"):
-                board_data = board_resp.get("data", {})
-                if isinstance(board_data, dict) and any(k in board_data for k in default_cfg):
-                    _log("成功从板载 fskv 恢复通知配置")
-                    for k, v in board_data.items():
-                        if k in default_cfg and isinstance(v, dict):
-                            default_cfg[k].update(v)
-                    try:
-                        with open(GATEWAY_CONFIG_PATH, "w", encoding="utf-8") as f:
-                            json.dump(default_cfg, f, ensure_ascii=False, indent=2)
-                    except Exception:
-                        pass
-                    return default_cfg
-        except Exception as e:
-            _log(f"尝试从板端读取配置异常: {e}")
+            curr_slot_info = {}
+            with self.backend.cache_lock:
+                for s in self.backend.slots:
+                    if s.get("slot") == action_slot:
+                        curr_slot_info = s
+                        break
+            current_ver = curr_slot_info.get("version") or ""
+            model = curr_slot_info.get("model") or "Air780"
+            bsp = curr_slot_info.get("bsp") or model
+            cur_tuple = parse_semver(current_ver)
 
-        # 回退读取 config.lua
-        lua_path = os.path.normpath(os.path.join(BASE_DIR, "..", "..", "deploy", "smart-gateway-780epv", "config.lua"))
-        if os.path.exists(lua_path):
-            try:
-                with open(lua_path, "r", encoding="utf-8", errors="ignore") as f:
-                    content = f.read()
-                for ch in ["feishu", "wecom", "dingtalk", "bark", "webhook"]:
-                    m = re.search(rf"{ch}\s*=\s*\{{([^}}]+)\}}", content)
-                    if m:
-                        blk = m.group(1)
-                        en = re.search(r"enable\s*=\s*(\d+)", blk)
-                        url = re.search(r"url\s*=\s*['\"]([^'\"]*)['\"]", blk)
-                        if en: default_cfg[ch]["enable"] = int(en.group(1))
-                        if url: default_cfg[ch]["url"] = url.group(1)
-                        if ch == "bark":
-                            grp = re.search(r"group\s*=\s*['\"]([^'\"]*)['\"]", blk)
-                            snd = re.search(r"sound\s*=\s*['\"]([^'\"]*)['\"]", blk)
-                            if grp: default_cfg[ch]["group"] = grp.group(1)
-                            if snd: default_cfg[ch]["sound"] = snd.group(1)
+            if cur_tuple < (1, 2, 6):
+                self._send_json_resp(400, {
+                    "ok": False,
+                    "error": f"模组固件版本 (v{current_ver or '未知'}) 较早，尚未内置串口极速热更协议桩，请使用【重新刷机控制台】升级底座固件",
+                    "slot": action_slot
+                })
+                return
+
+            is_epv = "EPV" in model.upper() or "EC718" in bsp.upper() or "EPV" in bsp.upper()
+            if not is_epv and "780E" in model.upper():
+                self._send_json_resp(400, {
+                    "ok": False,
+                    "error": f"模组架构为 {model} (EC618 平台)，与当前 EPV 升级镜像不兼容，请使用【重新刷机控制台】刷入对应专属固件",
+                    "slot": action_slot
+                })
+                return
+
+            with flashing_lock:
+                if flashing_state["is_flashing"]:
+                    self._send_json_resp(423, {
+                        "ok": False,
+                        "error": f"已有卡槽 [{flashing_state['slot']}] 正在烧录升级中，请稍候...",
+                        "state": flashing_state
+                    })
+                    return
+                flashing_state["is_flashing"] = True
+                flashing_state["slot"] = action_slot
+                flashing_state["percent"] = 5
+                flashing_state["status"] = "starting_ota"
+                flashing_state["stage"] = "starting"
+                flashing_state["error"] = None
+                flashing_state["start_time"] = time.time()
+
+            def _ota_worker(slot_to_upgrade):
+                def _cb(pct, status_text, stage="flashing"):
+                    update_flashing_progress(pct, status_text, stage=stage, slot=slot_to_upgrade)
+                    self.backend.broadcast_sse("flash_progress", {
+                        "slot": slot_to_upgrade,
+                        "percent": pct,
+                        "status": status_text,
+                        "stage": stage,
+                        "mode": "serial_sota"
+                    })
+
+                res = self.backend.perform_serial_ota(slot=slot_to_upgrade, progress_cb=_cb)
+                if not res.get("ok"):
+                    update_flashing_progress(0, "failed", stage="failed", error=res.get("error"), slot=slot_to_upgrade)
+                    self.backend.broadcast_sse("flash_progress", {
+                        "slot": slot_to_upgrade,
+                        "percent": 0,
+                        "status": "failed",
+                        "stage": "failed",
+                        "error": res.get("error")
+                    })
+                else:
+                    update_flashing_progress(100, "success", stage="success", slot=slot_to_upgrade)
+                    self.backend.broadcast_sse("flash_progress", {
+                        "slot": slot_to_upgrade,
+                        "percent": 100,
+                        "status": "success",
+                        "stage": "success",
+                        "target_version": res.get("target_version")
+                    })
+
+            threading.Thread(target=_ota_worker, args=(action_slot,), daemon=True).start()
+            self._send_json_resp(200, {
+                "ok": True,
+                "slot": action_slot,
+                "msg": f"已成功启动卡槽 [{action_slot}] 串口平滑热更任务",
+                "status": "started"
+            })
+            return
+
+        # 10.1 硬件底层线刷与全新模块烧录 (FlashToolCLI · AIR-35 通用多芯片引擎)
+        if path == "/api/control/flash":
+            data = body or {}
+            action_slot = data.get("slot") or target_slot
+            req_port = data.get("port")
+            req_chip = data.get("chip_type") or data.get("chip")
+            req_mode = data.get("mode") or "script"  # 'script' 或 'full'
+            req_model = data.get("hardware_model")
+
+            curr_slot_info = {}
+            if action_slot:
+                with self.backend.cache_lock:
+                    for s in self.backend.slots:
+                        if s.get("slot") == action_slot:
+                            curr_slot_info = s
+                            break
+
+            target_port = req_port or curr_slot_info.get("port")
+            model_bsp = req_model or curr_slot_info.get("model") or curr_slot_info.get("bsp") or ""
+
+            # 归一化芯片类型 (AIR-35: 彻底支持 EC718PV 与 EC618 双芯片架构)
+            import firmware_flasher
+            chip_type = firmware_flasher.normalize_chip_type(model_bsp, req_chip)
+
+            def _cli_flash_worker(slot_id, port, chip, mode, model):
+                self.backend.broadcast_sse("cli_flash_progress", {
+                    "slot": slot_id or "new_device",
+                    "percent": 5,
+                    "message": f"正在准备向目标设备 ({port or 'Bootloader自动探测'}) 下发烧录任务 ({chip.upper()} · {'全量' if mode=='full' else '脚本'})...",
+                    "stage": "starting"
+                })
+                # 1. 若为已知卡槽，暂停轮询以防冲突
+                if slot_id:
+                    self.backend.execute_cmd("pause_for_flash", {}, slot=slot_id, timeout=3.0)
+                time.sleep(0.5)
+
+                def _cb(pct, msg):
+                    self.backend.broadcast_sse("cli_flash_progress", {
+                        "slot": slot_id or "new_device",
+                        "percent": pct,
+                        "message": msg,
+                        "stage": "flashing"
+                    })
+
                 try:
-                    with open(GATEWAY_CONFIG_PATH, "w", encoding="utf-8") as f:
-                        json.dump(default_cfg, f, ensure_ascii=False, indent=2)
+                    res = firmware_flasher.flash_hardware_cli(
+                        current_vuart_port=port,
+                        hardware_model=model,
+                        chip_type=chip,
+                        mode=mode,
+                        progress_cb=_cb
+                    )
+                except Exception as e:
+                    res = {"ok": False, "msg": f"调用烧录引擎异常: {e}"}
+
+                # 2. 恢复串口轮询
+                if slot_id:
+                    self.backend.execute_cmd("resume_after_flash", {}, slot=slot_id, timeout=3.0)
+
+                if res.get("ok"):
+                    self.backend.broadcast_sse("cli_flash_progress", {
+                        "slot": slot_id or "new_device",
+                        "percent": 100,
+                        "message": f"线刷完成！{chip.upper()} 模组已平滑重启生效",
+                        "stage": "success",
+                        "port": res.get("port"),
+                        "chip": chip,
+                        "mode": mode
+                    })
+                else:
+                    self.backend.broadcast_sse("cli_flash_progress", {
+                        "slot": slot_id or "new_device",
+                        "percent": 0,
+                        "message": f"硬件线刷中断: {res.get('msg')}",
+                        "stage": "error"
+                    })
+
+            threading.Thread(
+                target=_cli_flash_worker,
+                args=(action_slot, target_port, chip_type, req_mode, model_bsp),
+                daemon=True
+            ).start()
+
+            self._send_json_resp(200, {
+                "ok": True,
+                "slot": action_slot or "new_device",
+                "chip": chip_type,
+                "mode": req_mode,
+                "port": target_port,
+                "msg": f"已启动 {chip_type.upper()} ({'全量系统刷入' if req_mode=='full' else '极速应用脚本更新'}) 任务",
+                "status": "started"
+            })
+            return
+
+        # 7. 清空板载历史记录 (支持定向卡槽)
+        if path == "/api/control/clear_history":
+            resp = self.backend.execute_cmd("clear_history", slot=target_slot, timeout=6.0)
+            if resp.get("ok"):
+                with self.backend.cache_lock:
+                    self.backend.recent_sms_by_slot[target_slot] = []
+                self._send_json_resp(200, {"ok": True, "slot": target_slot, "msg": "板载短信黑匣子已清空"})
+            else:
+                self._send_json_resp(200, {"ok": False, "slot": target_slot, "error": resp.get("error") or "清空黑匣子失败"})
+            return
+
+        # 8. 保存网关通用配置 (含通知设置与 MCP 开关)
+        if path in ("/api/config", "/api/config/notify"):
+            try:
+                cur_cfg = {}
+                if os.path.exists(GATEWAY_CONFIG_PATH):
+                    with open(GATEWAY_CONFIG_PATH, "r", encoding="utf-8") as f:
+                        cur_cfg = json.load(f)
+                for k, v in body.items():
+                    if isinstance(v, dict):
+                        if k not in cur_cfg: cur_cfg[k] = {}
+                        cur_cfg[k].update(v)
+                    else:
+                        cur_cfg[k] = v
+
+                with open(GATEWAY_CONFIG_PATH, "w", encoding="utf-8") as f:
+                    json.dump(cur_cfg, f, ensure_ascii=False, indent=2)
+
+                # 向底层 Hub 发送配置重载指令（免检内部指令携带内部令牌）
+                hub_cmd = {
+                    "type": "cmd",
+                    "cmd": "reload_notify_config",
+                    "source": "web",
+                    "token": getattr(self.backend, "internal_session_token", "")
+                }
+                try:
+                    line = json.dumps(hub_cmd, ensure_ascii=False) + "\n"
+                    with self.backend.sock_lock:
+                        if self.backend.sock:
+                            self.backend.sock.sendall(line.encode("utf-8"))
                 except Exception:
                     pass
-            except Exception as e:
-                _log(f"回退读取 config.lua 失败: {e}")
-        return default_cfg
 
-    def _save_notify_config(self, patch_cfg: dict) -> dict:
-        """保存上位机通知配置到 gateway_config.json"""
-        cur = self._read_notify_config()
-        for k, v in patch_cfg.items():
-            if k in cur and isinstance(v, dict):
-                cur[k].update(v)
-            elif isinstance(v, dict):
-                cur[k] = v
-        with open(GATEWAY_CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(cur, f, ensure_ascii=False, indent=2)
-        _log(f"已持久化更新 gateway_config.json")
-        return cur
+                self._send_json_resp(200, {"ok": True, "msg": "系统配置已成功保存并立即生效"})
+            except Exception as e:
+                self._send_json_resp(500, {"ok": False, "error": f"保存配置失败: {e}"})
+            return
+
+        # 9. 测试单渠道推送
+        if path == "/api/config/notify/test":
+            channel = body.get("channel")
+            channel_cfg = body.get("config") or {}
+            if not channel or not isinstance(channel_cfg, dict):
+                self._send_json_resp(400, {"ok": False, "error": "缺少测试渠道或参数"})
+                return
+
+            target_slot = body.get("slot")
+            dev_desc = None
+            if target_slot and hasattr(self.backend, "hub") and self.backend.hub:
+                session = self.backend.hub.session_pool.get_session(target_slot)
+                if session:
+                    m = session.meta.get("model") or "Air780"
+                    im = session.meta.get("imei") or ""
+                    dev_desc = f"[{session.slot_id.upper()}] {m} · IMEI: {im}" if im else f"[{session.slot_id.upper()}] {m}"
+            res = test_channel_push(channel, channel_cfg, device_desc=dev_desc)
+            self._send_json_resp(200, res)
+            return
+
+        self._send_json_resp(404, {"ok": False, "error": "接口不存在"})
 
     def handle_sse_stream(self):
-        """处理 Server-Sent Events 持久推流连接"""
+        """处理 SSE 持续事件推送流"""
         self.send_response(200)
         self._send_cors_headers()
-        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "keep-alive")
+        self.send_header("X-Accel-Buffering", "no")
         self.end_headers()
 
-        # 注册监听队列
-        event_queue = self.backend.register_sse_listener()
-        _log(f"客户端已建立 SSE 事件订阅通道 ({self.client_address})")
+        q = self.backend.register_sse_listener()
+        _log(f"前端已建立 SSE 事件流连接 (当前队列数: {len(self.backend.sse_listeners)})")
 
-        # 立即推送初始当前看板状态
-        with self.backend.cache_lock:
-            if self.backend.latest_status:
-                initial_status = json.dumps(self.backend.latest_status, ensure_ascii=False)
-                try:
-                    self.wfile.write(f"event: status_update\ndata: {initial_status}\n\n".encode("utf-8"))
-                    self.wfile.flush()
-                except Exception:
-                    pass
+        # 初始向刚连接的前端发送当前卡槽列表
+        init_slots_event = {
+            "event": "cluster_update",
+            "data": {
+                "slots": self.backend.slots,
+                "active_slot": self.backend.active_slot
+            }
+        }
+        init_payload = f"event: cluster_update\ndata: {json.dumps(init_slots_event['data'], ensure_ascii=False)}\n\n".encode("utf-8")
+        try:
+            self.wfile.write(init_payload)
+            self.wfile.flush()
+        except Exception:
+            self.backend.unregister_sse_listener(q)
+            return
 
         try:
             while True:
                 try:
-                    item = event_queue.get(timeout=15.0)
-                    evt_name = item["event"]
-                    data_str = json.dumps(item["data"], ensure_ascii=False)
-                    msg = f"event: {evt_name}\ndata: {data_str}\n\n"
-                    self.wfile.write(msg.encode("utf-8"))
+                    item = q.get(timeout=15.0)
+                    evt_name = item.get("event", "message")
+                    evt_data = json.dumps(item.get("data", {}), ensure_ascii=False)
+                    payload = f"event: {evt_name}\ndata: {evt_data}\n\n".encode("utf-8")
+                    self.wfile.write(payload)
                     self.wfile.flush()
                 except queue.Empty:
-                    # 15s 发送心跳包保活，防止某些网络或反向代理超时关闭连接
-                    self.wfile.write(b":keepalive\n\n")
+                    # 发送保活心跳包
+                    self.wfile.write(b": keepalive\n\n")
                     self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError, OSError):
+        except (BrokenPipeError, ConnectionResetError):
             pass
+        except Exception as e:
+            _log(f"SSE 推送异常: {e}")
         finally:
-            self.backend.unregister_sse_listener(event_queue)
-            _log(f"客户端断开 SSE 事件通道 ({self.client_address})")
+            self.backend.unregister_sse_listener(q)
+            _log("前端已断开 SSE 事件流连接")
 
+
+# =========================================================================
+# WebServer 容器封装
+# =========================================================================
 
 class WebServer:
-    """可编程启停的 Web 控制台服务器封装"""
-
-    def __init__(self, host=DEFAULT_WEB_HOST, port=DEFAULT_WEB_PORT, hub_host=DEFAULT_HUB_HOST, hub_port=DEFAULT_HUB_PORT):
+    def __init__(self, host: str = DEFAULT_WEB_HOST, port: int = DEFAULT_WEB_PORT, hub_host: str = DEFAULT_HUB_HOST, hub_port: int = DEFAULT_HUB_PORT):
         self.host = host
         self.port = port
-        self.hub_host = hub_host
-        self.hub_port = hub_port
-        self.backend = None
-        self.server = None
-        self.running = False
+        self.backend = HubBackendClient(host=hub_host, port=hub_port)
+        self.httpd = None
 
     def start(self):
-        self.backend = HubBackendClient(host=self.hub_host, port=self.hub_port)
         self.backend.start()
-
-        GatewayWebHandler.backend = self.backend
-        self.server = ThreadedHTTPServer((self.host, self.port), GatewayWebHandler)
-        self.running = True
-
-        _log(f"============================================================")
-        _log(f"  Air780EPV 智能蜂窝通信网关 Web 控制台已启动")
-        _log(f"  本地访问入口: http://127.0.0.1:{self.port}")
-        _log(f"  局域网入口:   http://<宿主机/NAS局域网IP>:{self.port}")
-        _log(f"  物理中枢地址: {self.hub_host}:{self.hub_port}")
-        _log(f"============================================================")
-
+        self.httpd = ThreadedHTTPServer((self.host, self.port), GatewayWebHandler)
+        self.httpd.backend = self.backend
+        _log(f"Web 控制台已启动，访问地址: http://127.0.0.1:{self.port}")
         try:
-            self.server.serve_forever()
-        except Exception:
-            pass
+            self.httpd.serve_forever()
+        except KeyboardInterrupt:
+            _log("正在关闭 Web 控制台...")
+        finally:
+            if self.httpd:
+                self.httpd.shutdown()
+            self.backend.stop()
+            _log("Web 控制台已安全关闭")
 
     def stop(self):
-        self.running = False
-        if self.server:
-            try:
-                self.server.shutdown()
-                self.server.server_close()
-            except Exception:
-                pass
-        if self.backend:
-            try:
+        """外部受控停止 Web 监听与后端 TCP 客户端"""
+        try:
+            if self.httpd:
+                self.httpd.shutdown()
+        except Exception:
+            pass
+        try:
+            if self.backend:
                 self.backend.stop()
-            except Exception:
-                pass
-        _log("Web 控制台已安全退出")
+        except Exception:
+            pass
+        _log("Web 控制台已安全关闭")
 
-
-def run_web_server(host=DEFAULT_WEB_HOST, port=DEFAULT_WEB_PORT, hub_host=DEFAULT_HUB_HOST, hub_port=DEFAULT_HUB_PORT):
-    ws = WebServer(host=host, port=port, hub_host=hub_host, hub_port=hub_port)
-    try:
-        ws.start()
-    except KeyboardInterrupt:
-        _log("正在停止 Web 服务器...")
-    finally:
-        ws.stop()
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Air780EPV 智能随身通信网关 Web 控制台")
-    parser.add_argument("--host", default=DEFAULT_WEB_HOST, help=f"Web 监听地址 (默认 {DEFAULT_WEB_HOST})")
-    parser.add_argument("--port", type=int, default=DEFAULT_WEB_PORT, help=f"Web 监听端口 (默认 {DEFAULT_WEB_PORT})")
-    parser.add_argument("--hub-host", default=DEFAULT_HUB_HOST, help=f"Hub 中枢地址 (默认 {DEFAULT_HUB_HOST})")
-    parser.add_argument("--hub-port", type=int, default=DEFAULT_HUB_PORT, help=f"Hub 中枢端口 (默认 {DEFAULT_HUB_PORT})")
+def main():
+    parser = argparse.ArgumentParser(description="Air780 Series Smart Cellular Gateway Web Console")
+    parser.add_argument("--port", type=int, default=DEFAULT_WEB_PORT, help=f"HTTP 监听端口 (默认 {DEFAULT_WEB_PORT})")
+    parser.add_argument("--host", type=str, default=DEFAULT_WEB_HOST, help=f"HTTP 监听地址 (默认 {DEFAULT_WEB_HOST})")
+    parser.add_argument("--hub-host", type=str, default=DEFAULT_HUB_HOST, help="底层 Hub 主机地址")
+    parser.add_argument("--hub-port", type=int, default=DEFAULT_HUB_PORT, help="底层 Hub 监听端口")
     args = parser.parse_args()
 
-    run_web_server(host=args.host, port=args.port, hub_host=args.hub_host, hub_port=args.hub_port)
+    server = WebServer(host=args.host, port=args.port, hub_host=args.hub_host, hub_port=args.hub_port)
+    server.start()
+
+if __name__ == "__main__":
+    main()

@@ -61,6 +61,7 @@ class GatewayDriver:
 
         # 验证码事件同步通知条件变量
         self.otp_cond = threading.Condition(self.state_lock)
+        self._last_mcp_action_allowed: bool = False
 
         self._initialized = True
 
@@ -85,52 +86,26 @@ class GatewayDriver:
                     pass
                 self.sock = None
 
-    def _auto_spawn_hub(self):
-        """静默自动拉起后台 Gateway Hub"""
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        hub_path = os.path.join(base_dir, "host_gateway", "gateway_hub.py")
-        if not os.path.exists(hub_path):
-            _dbg(f"未找到 Hub 脚本: {hub_path}")
-            return
-
-        _dbg(f"正在后台静默自拉起网关共享中枢: {hub_path}...")
-        try:
-            creation_flags = 0
-            if os.name == "nt":
-                creation_flags = getattr(subprocess, "DETACHED_PROCESS", 0x00000008) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
-
-            subprocess.Popen(
-                [sys.executable, hub_path],
-                creationflags=creation_flags,
-                close_fds=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
-        except Exception as e:
-            _dbg(f"自拉起 Hub 失败: {e}")
-
     def _ensure_connected(self) -> bool:
-        """检查并确保本地 IPC Socket 已连接；若未启动则自拉起并重试"""
+        """检查并确保本地 IPC Socket 已连接；若未启动则 Fast-fail 报错，绝不盲目后台自拉起僵尸进程"""
         with self.sock_lock:
             if self.sock:
                 return True
 
-            for attempt in range(1, 5):
+            for attempt in range(1, 3):
                 try:
                     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                    s.settimeout(2.0)
+                    s.settimeout(1.5)
                     s.connect((self.host, self.port))
                     s.settimeout(None)
                     self.sock = s
                     _dbg(f"成功连接至本地共享中枢 ({self.host}:{self.port})")
                     return True
                 except (ConnectionRefusedError, OSError):
-                    if attempt == 1:
-                        self._auto_spawn_hub()
-                    time.sleep(0.5)
+                    time.sleep(0.3)
 
-            _dbg("连接本地网关中枢超时")
+            _dbg("连接本地网关中枢超时或未运行")
             return False
 
     def _rx_loop(self):
@@ -236,16 +211,17 @@ class GatewayDriver:
                         self.otp_cond.notify_all()
 
     def execute_cmd(self, cmd: str, params: Optional[Dict[str, Any]] = None, slot: Optional[str] = None, timeout: float = 6.0) -> Dict[str, Any]:
-        """向网关共享中枢下发指令并同步等待回执"""
+        """向网关共享中枢下发指令并同步等待回执 (显式标识 source: 'mcp')"""
         if not self._ensure_connected():
-            raise RuntimeError(f"无法连接到网关共享中枢 ({self.host}:{self.port})，请确认后台服务是否正常")
+            raise RuntimeError("❌ 无法连接通信网关：上位机网关中枢未运行。请先双击运行上位机程序或打开 Web 控制台 (http://127.0.0.1:17801)。")
 
-        req_id = "ipc_" + uuid.uuid4().hex[:8]
+        req_id = "mcp_" + uuid.uuid4().hex[:8]
         req_pkt: Dict[str, Any] = {
             "type": "cmd",
             "id": req_id,
             "cmd": cmd,
-            "params": params or {}
+            "params": params or {},
+            "source": "mcp"
         }
         if slot:
             req_pkt["slot"] = slot
@@ -263,7 +239,7 @@ class GatewayDriver:
             line = json.dumps(req_pkt, ensure_ascii=False) + "\n"
             with self.sock_lock:
                 if not self.sock:
-                    raise RuntimeError("IPC 管道未连接")
+                    raise RuntimeError("❌ 与上位机 IPC 通道未连接")
                 self.sock.sendall(line.encode("utf-8"))
         except Exception as e:
             with self.pending_lock:
@@ -278,7 +254,12 @@ class GatewayDriver:
         if not signaled or not wait_entry["response"]:
             raise TimeoutError(f"指令 '{cmd}' 等待网关响应超时 ({timeout}s)")
 
-        return wait_entry["response"]
+        resp = wait_entry["response"]
+        # 若收到物理调用被拦截回执，直接抛出人话错误让 FastMCP 标红
+        if resp.get("ok") is False and resp.get("msg") == "MCP_ACCESS_DENIED":
+            raise PermissionError(resp.get("error") or "❌ 物理调用被拒绝：上位机管理员已在控制台中关闭 MCP 开关。")
+
+        return resp
 
     # ================= 业务方法接口 =================
 
@@ -286,18 +267,43 @@ class GatewayDriver:
         """获取当前集群所有在线卡槽信息"""
         res = self.execute_cmd("get_slots", timeout=4.0)
         data = res.get("data", {})
+        if "mcp_action_allowed" in data:
+            with self.state_lock:
+                self._last_mcp_action_allowed = bool(data.get("mcp_action_allowed", False))
         return data.get("slots", [])
+
+    def is_mcp_action_allowed(self) -> bool:
+        """检查上位机当前是否允许 MCP 执行敏感操作"""
+        try:
+            res = self.execute_cmd("get_slots", timeout=3.0)
+            data = res.get("data", {})
+            allowed = bool(data.get("mcp_action_allowed", False))
+            with self.state_lock:
+                self._last_mcp_action_allowed = allowed
+            return allowed
+        except RuntimeError as re:
+            # 若是底层中枢未运行或网络不可达，绝不误报为权限被关，向上透传真实连接异常
+            if "上位机网关中枢未运行" in str(re) or "未连接" in str(re):
+                raise
+            with self.state_lock:
+                return self._last_mcp_action_allowed
+        except Exception:
+            with self.state_lock:
+                return self._last_mcp_action_allowed
 
     def get_status(self, slot: Optional[str] = None) -> Dict[str, Any]:
         """获取网关看板数据（支持指定卡槽）"""
         res = self.execute_cmd("get_status", slot=slot, timeout=4.0)
         return res.get("data", {})
 
-    def send_sms(self, phone: str, text: str, slot: Optional[str] = None) -> Dict[str, Any]:
-        """主动发送短信（支持指定卡槽出站）"""
+    def send_sms(self, phone: str, text: str, slot: Optional[str] = None, strategy: str = "operator_affinity") -> Dict[str, Any]:
+        """主动发送短信（支持指定卡槽出站与集群智能分流 AIR-22）"""
         if not phone or not text:
             raise ValueError("手机号和短信正文不能为空")
-        res = self.execute_cmd("send_sms", {"phone": phone, "content": text}, slot=slot, timeout=8.0)
+        params = {"phone": phone, "content": text, "strategy": strategy}
+        if slot:
+            params["slot"] = slot
+        res = self.execute_cmd("send_sms", params, slot=slot, timeout=8.0)
         return res
 
     def get_history(self, limit: int = 20, slot: Optional[str] = None) -> Dict[str, Any]:
@@ -308,6 +314,24 @@ class GatewayDriver:
     def clear_history(self, slot: Optional[str] = None) -> Dict[str, Any]:
         """清空脱机黑匣子（支持指定卡槽）"""
         return self.execute_cmd("clear_history", slot=slot, timeout=4.0)
+
+    def dial_phone(self, phone: str, slot: Optional[str] = None, timeout_seconds: int = 15, hangup_on_answer: bool = True) -> Dict[str, Any]:
+        """发起 4G VoLTE 语音呼叫（支持指定卡槽与超时看门狗防扣费 AIR-30）"""
+        if not phone:
+            raise ValueError("电话号码不能为空")
+        params = {"phone": phone, "timeout": timeout_seconds, "hangup_on_answer": hangup_on_answer}
+        if slot:
+            params["slot"] = slot
+        res = self.execute_cmd("call_dial", params, slot=slot, timeout=8.0)
+        return res
+
+    def hangup_phone(self, slot: Optional[str] = None) -> Dict[str, Any]:
+        """手动挂断当前通话（AIR-30）"""
+        params = {}
+        if slot:
+            params["slot"] = slot
+        res = self.execute_cmd("call_hangup", params, slot=slot, timeout=4.0)
+        return res
 
     def set_rndis(self, enable: bool, slot: Optional[str] = None) -> Dict[str, Any]:
         """启闭 4G 随身上网 (USB 虚拟网卡)"""
@@ -329,6 +353,11 @@ class GatewayDriver:
         3. 若仍未收到，返回超时异常。
         """
         self.start()
+
+        # AIR-36: MCP 开关硬门禁检查，若被禁用则立即 Fast-fail，杜绝盲等超时
+        if not self.is_mcp_action_allowed():
+            raise PermissionError("❌ 物理调用被拒绝：上位机管理员已在 Web 控制台中关闭 AI 智能体通信服务 (MCP) 开关。请联系管理员在控制台【系统设置 - AI 智能体通信服务】中开启授权。")
+
         now = time.time()
 
         with self.state_lock:
@@ -365,6 +394,8 @@ class GatewayDriver:
                         "content": it.get("content"),
                         "ts": item_ts
                     }
+        except PermissionError:
+            raise
         except Exception:
             pass
 
@@ -374,6 +405,8 @@ class GatewayDriver:
     def get_latest_otp(self, freshness_seconds: int = 180, slot: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """瞬时获取验证码（不阻塞等待，支持按 slot 过滤）"""
         self.start()
+        if not self.is_mcp_action_allowed():
+            raise PermissionError("❌ 物理调用被拒绝：上位机管理员已在 Web 控制台中关闭 AI 智能体通信服务 (MCP) 开关。请联系管理员在控制台【系统设置 - AI 智能体通信服务】中开启授权。")
         with self.state_lock:
             if self.latest_otp and (time.time() - self.latest_otp.get("ts", 0) <= freshness_seconds):
                 if not slot or self.latest_otp.get("slot") == slot:

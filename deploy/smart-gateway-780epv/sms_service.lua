@@ -1,24 +1,27 @@
 local M = {}
+local model = require "model"
 local serial_comm = require "serial_comm"
 local pending_tx = {}
 local active_tx = nil
 local MAX_PENDING_TX = 16
 local sms_frozen = false
 local latest_otp_record = nil
+local pending_store_sms = {}
 
 local function next_sms_event_id()
     return serial_comm.new_event_id("sms")
 end
 
-local function watch_send(req)
-    req.timer_id = sys.timerStart(function()
-        if active_tx ~= req then return end
-        sms_frozen = true
-        req.unknown = true
-        serial_comm.send_response(req.id, -408, "UNKNOWN", { reason = "modem_result_timeout" })
-        -- The modem has no request IDs. Keep this slot until its late callback;
-        -- do not attach that callback to a subsequent SMS.
-    end, 60000)
+local function execute_sms_send(to, text)
+    local is_short_code = (#to <= 8 and to:match("^%d+$") ~= nil)
+    local ok, ret
+    if is_short_code then
+        ok, ret = pcall(sms.send, to, text, false)
+    else
+        ok, ret = pcall(sms.send, to, text)
+    end
+    log.info("sms", "sms.send to:", to, "len:", #text, "short:", is_short_code, "ok:", ok, "ret:", ret)
+    return ok and (ret == true)
 end
 
 local function dispatch_next()
@@ -26,12 +29,15 @@ local function dispatch_next()
     local req = table.remove(pending_tx, 1)
     if not req then return end
     active_tx = req
-    if not sms.send(req.to, req.text) then
+    if not execute_sms_send(req.to, req.text) then
         active_tx = nil
-        serial_comm.send_response(req.id, -102, "SEND_FAILED")
+        serial_comm.send_response(req.id, -102, "SEND_FAILED", { reason = "modem_rejected" })
         dispatch_next()
     else
-        watch_send(req)
+        active_tx = nil
+        sms_frozen = false
+        serial_comm.send_response(req.id, 0, "SENT_OK", { success = true })
+        dispatch_next()
     end
 end
 function M.get_latest_otp(freshness_sec)
@@ -111,12 +117,58 @@ function M.init()
         if led and led.event then led.event() end
         local msg_id = next_sms_event_id()
         local timestamp = os.time()
-        serial_comm.publish("sms_rx", { id = msg_id, from = from, content = content, code = code, time = timestamp })
+        serial_comm.publish("sms_rx", {
+            id = msg_id,
+            from = from,
+            content = content,
+            code = code,
+            time = timestamp,
+            bsp = model.bsp(),
+            model = model.bsp(),
+            imei = model.imei(),
+            iccid = model.iccid()
+        })
         sys.publish("NOTIFY_PUSH", "sms", from, content, code, msg_id)
-        sys.publish("SMS_SAVE", from, content, code, msg_id, timestamp)
+
+        -- 双模自适应存储策略：若开启了仅存上位机(store_on_board==0)且串口在线，走 3.5s ACK 兜底；否则直接存盘
+        local store_policy = (fskv and fskv.get("store_on_board"))
+        if store_policy == nil then store_policy = 1 end
+
+        if store_policy == 0 and serial_comm.is_connected and serial_comm.is_connected() then
+            log.info("sms", "Store-on-host active & serial connected, buffering in RAM with 3.5s fallback:", msg_id)
+            local timer_id = sys.timerStart(function()
+                if pending_store_sms[msg_id] then
+                    pending_store_sms[msg_id] = nil
+                    log.warn("sms", "Store ACK timeout 3.5s for msg:", msg_id, "fallback to LittleFS")
+                    sys.publish("SMS_SAVE", from, content, code, msg_id, timestamp)
+                end
+            end, 3500)
+            pending_store_sms[msg_id] = {
+                timer_id = timer_id,
+                from = from,
+                content = content,
+                code = code,
+                timestamp = timestamp
+            }
+        else
+            sys.publish("SMS_SAVE", from, content, code, msg_id, timestamp)
+        end
+    end)
+    sys.subscribe("SMS_STORE_ACK", function(ack_id)
+        if not ack_id then return end
+        local rec = pending_store_sms[ack_id]
+        if rec then
+            if rec.timer_id then sys.timerStop(rec.timer_id) end
+            pending_store_sms[ack_id] = nil
+            log.info("sms", "Store ACK confirmed for msg:", ack_id, "- 0 Flash wear fulfilled")
+        end
     end)
     sys.subscribe("SMS_SENT", function(result)
         log.info("sms", "SMS_SENT result:", result and "ok" or "failed")
+        serial_comm.publish("sms_debug", {
+            stage = "sms_sent_event",
+            result = result
+        })
         local req = active_tx
         active_tx = nil
         if req then
@@ -132,8 +184,8 @@ function M.init()
         if cmd_packet.cmd == "send_sms" then
             local req_id = cmd_packet.id or ("tx_" .. os.time())
             local data = cmd_packet.data or cmd_packet.params or {}
-            local to = data.to or data.phone
-            local text = data.text or data.content
+            local to = data.to or data.phone or cmd_packet.phone or cmd_packet.to
+            local text = data.text or data.content or cmd_packet.content or cmd_packet.text
             if type(to) ~= "string" or #to == 0 or type(text) ~= "string" or #text == 0 then
                 serial_comm.send_response(req_id, -101, "PARAM_ERR")
                 return
@@ -151,15 +203,27 @@ function M.init()
                 serial_comm.send_response(req_id, 0, "QUEUED", { queue_position = #pending_tx })
             else
                 active_tx = { id = req_id, to = to, text = text }
-                if not sms.send(to, text) then
+                if not execute_sms_send(to, text) then
                     active_tx = nil
-                    serial_comm.send_response(req_id, -102, "SEND_FAILED")
+                    serial_comm.send_response(req_id, -102, "SEND_FAILED", { reason = "modem_rejected" })
                     dispatch_next()
                 else
-                    serial_comm.send_response(req_id, 0, "QUEUED")
-                    watch_send(active_tx)
+                    active_tx = nil
+                    sms_frozen = false
+                    serial_comm.send_response(req_id, 0, "SENT_OK", { success = true })
+                    dispatch_next()
                 end
             end
+        elseif cmd_packet.cmd == "reset_sms" or cmd_packet.cmd == "clear_sms_queue" then
+            local req_id = cmd_packet.id or ("reset_" .. os.time())
+            if active_tx and active_tx.timer_id then
+                sys.timerStop(active_tx.timer_id)
+            end
+            active_tx = nil
+            sms_frozen = false
+            pending_tx = {}
+            serial_comm.send_response(req_id, 0, "OK", { status = "sms_queue_cleared" })
+            return
         end
     end)
     log.info("sms", "init ok")

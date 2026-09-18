@@ -27,11 +27,19 @@ end
 function model.vbat_valid()
     return vbat_is_valid
 end
+local cached_bsp = nil
+local cached_imei = nil
+local cached_sn = nil
+local cached_iccid = nil
+local cached_mcu_id = nil
+
 function model.os()
     return (rtos and rtos.firmware and rtos.firmware()) or "unknown"
 end
 function model.bsp()
-    return (hmeta and hmeta.model and hmeta.model()) or (rtos and rtos.bsp and rtos.bsp()) or "unknown"
+    if cached_bsp then return cached_bsp end
+    cached_bsp = (hmeta and hmeta.model and hmeta.model()) or (rtos and rtos.bsp and rtos.bsp()) or "unknown"
+    return cached_bsp
 end
 function model.hw()
     return (hmeta and hmeta.hwver and hmeta.hwver()) or "unknown"
@@ -43,10 +51,56 @@ function model.build()
     return rtos and rtos.buildDate and rtos.buildDate() or "unknown"
 end
 function model.sn()
-    return mobile and mobile.sn and mobile.sn() or nil
+    if cached_sn and #cached_sn > 0 then return cached_sn end
+    if mobile and mobile.sn then
+        local ok, val = pcall(mobile.sn)
+        if ok and val and #val > 0 then
+            cached_sn = val
+            return cached_sn
+        end
+    end
+    return nil
 end
 function model.imei()
-    return mobile and mobile.imei and mobile.imei() or nil
+    if cached_imei and #cached_imei > 0 then return cached_imei end
+    if mobile and mobile.imei then
+        local ok, val = pcall(mobile.imei)
+        if ok and val and #val > 0 then
+            cached_imei = val
+            return cached_imei
+        end
+    end
+    return nil
+end
+function model.iccid()
+    if cached_iccid and #cached_iccid > 0 then return cached_iccid end
+    if mobile and mobile.iccid then
+        local ok, val = pcall(mobile.iccid)
+        if ok and val and #val > 0 then
+            cached_iccid = val
+            return cached_iccid
+        end
+    end
+    return nil
+end
+function model.mcu_id()
+    if cached_mcu_id then return cached_mcu_id end
+    if mcu and mcu.unique_id then
+        local ok, val = pcall(mcu.unique_id)
+        if ok and val and type(val) == "string" and val.toHex then
+            cached_mcu_id = val:toHex()
+            return cached_mcu_id
+        end
+    end
+    return nil
+end
+function model.device_label()
+    local b = model.bsp()
+    local m = model.imei()
+    if m and #m > 0 then
+        return string.format("%s (IMEI: %s)", b, m)
+    end
+    return b
 end
 function model.capabilities()
     return {

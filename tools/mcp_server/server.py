@@ -27,7 +27,7 @@ driver.start()
 def cellular_list_dongles() -> str:
     """
     主动探测并列出当前多卡槽通信集群（Multi-Dongle Cluster）中所有接入的 4G 模组与卡槽信息。
-    支持 1~N 块模组热插拔识别，输出各卡槽的 slot_id、硬件型号、芯片架构(BSP)、COM 端口、在线状态、4G 信号(CSQ)以及硬件能力矩阵(如 VoLTE/FOTA 等)。
+    支持 1~N 块模组热插拔识别，输出各卡槽的 slot_id、硬件型号、芯片架构(BSP)、绑定的手机号、COM 端口、在线状态、4G 信号(CSQ)以及硬件能力矩阵(如 VoLTE/FOTA 等)。
     """
     try:
         driver.start()
@@ -35,9 +35,30 @@ def cellular_list_dongles() -> str:
     except Exception as e:
         raise RuntimeError(f"获取集群卡槽列表失败: {e}")
 
+    # 规范卡槽元数据透传，消除 AI 盲人摸象
+    slots_meta = []
+    for d in dongles:
+        slot_id = d.get("slot", "")
+        model = d.get("model") or d.get("bsp") or "Air780"
+        phone = d.get("phone") or "未知号码"
+        caps = d.get("capabilities", {})
+        slots_meta.append({
+            "slot": slot_id,
+            "model": model,
+            "phone": phone,
+            "port": d.get("port"),
+            "online": d.get("online", False),
+            "signal_csq": d.get("csq"),
+            "capabilities": {
+                "volte_call": caps.get("volte", False),
+                "fota_upgrade": caps.get("fota") == "supported",
+                "sms": True
+            }
+        })
+
     result = {
         "cluster_total": len(dongles),
-        "slots": dongles
+        "slots": slots_meta
     }
     return json.dumps(result, ensure_ascii=False, indent=2)
 
@@ -56,7 +77,20 @@ def cellular_wait_for_otp(timeout_seconds: int = 20, freshness_seconds: int = 18
       slot: 可选卡槽过滤（如 'slot_1', 'slot_2'；缺省为监听集群任意卡槽）
     """
     try:
+        driver.start()
+        # 前置检查权限与可用性：若 MCP 处于关闭隔离态，立即 Fast-fail 拦截，杜绝盲等 20 秒
+        if not driver.is_mcp_action_allowed():
+            raise PermissionError("❌ 物理调用被拒绝：上位机管理员已在 Web 控制台中关闭 AI 智能体通信服务 (MCP) 开关。请联系管理员在控制台【系统设置 - AI 智能体通信服务】中开启授权。")
+    except PermissionError as pe:
+        raise RuntimeError(str(pe))
+    except Exception as e:
+        if "上位机网关中枢未运行" in str(e):
+            raise RuntimeError(str(e))
+
+    try:
         otp_info = driver.wait_for_otp(timeout_seconds=timeout_seconds, freshness_seconds=freshness_seconds, slot=slot)
+    except PermissionError as pe:
+        raise RuntimeError(str(pe))
     except Exception as e:
         raise RuntimeError(f"验证码守候失败: {e}")
 
@@ -67,7 +101,8 @@ def cellular_wait_for_otp(timeout_seconds: int = 20, freshness_seconds: int = 18
     result = {
         "status": "SUCCESS",
         "otp_code": otp_info.get("code"),
-        "slot": otp_info.get("slot", slot or "slot_1"),
+        "from_slot": otp_info.get("slot", slot or "slot_1"),
+        "receiver_phone": otp_info.get("receiver") or "",
         "sender": otp_info.get("from"),
         "received_at": time_str,
         "age_seconds_ago": age_sec,
@@ -124,29 +159,78 @@ def cellular_get_status(slot: Optional[str] = None) -> str:
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 @mcp.tool()
-def cellular_send_sms(phone: str, content: str, slot: Optional[str] = None) -> str:
+def cellular_dial_phone(phone: str, slot: Optional[str] = None, timeout_seconds: int = 15, hangup_on_answer: bool = True) -> str:
     """
-    驱动 4G 蜂窝射频向目标手机号主动代发一条短信（支持指定出站卡槽）。
+    驱动 4G VoLTE 蜂窝语音向目标电话号码发起呼叫振铃（AIR-30）。
+    可用于突发紧急告警（服务器宕机、UPS断电、安防报警）时物理打响主人手机，支持 0 话费超时自动挂断看门狗。
+    
+    参数:
+      phone: 目标电话号码（如 '13800000000'）
+      slot: 可选出站卡槽（如 'slot_2'；缺省自动优选具备 VoLTE 语音协议栈且插卡的模组）
+      timeout_seconds: 最大振铃等待秒数（默认 15 秒，超时自动挂断以防扣费）
+      hangup_on_answer: 对方一旦接听是否立即秒挂断（默认 True，确保双方 0 话费）
+    """
+    if not phone:
+        raise ValueError("目标电话号码不能为空")
+
+    try:
+        driver.start()
+        res = driver.dial_phone(phone, slot=slot, timeout_seconds=timeout_seconds, hangup_on_answer=hangup_on_answer)
+    except Exception as e:
+        raise RuntimeError(f"拨号失败: {e}")
+
+    if not res.get("ok"):
+        err = res.get("error") or res.get("msg") or "未知错误"
+        return f"❌ 电话呼叫失败: {err} (卡槽: {res.get('slot') or slot})"
+
+    used_slot = res.get("slot") or slot or "slot_2"
+    watchdog_desc = f"{timeout_seconds}秒后自动挂断（防扣费看门狗）"
+    return f"📞 已向 {phone} 发起 VoLTE 电话呼叫！[出站卡槽: {used_slot}] 状态: 对方手机正在振铃，{watchdog_desc}。"
+
+@mcp.tool()
+def cellular_hangup_phone(slot: Optional[str] = None) -> str:
+    """
+    主动挂断当前正在进行中的电话呼叫（AIR-30）。
+    
+    参数:
+      slot: 可选卡槽编号（缺省针对当前活跃卡槽）
+    """
+    try:
+        driver.start()
+        res = driver.hangup_phone(slot=slot)
+    except Exception as e:
+        raise RuntimeError(f"挂断通话失败: {e}")
+
+    used_slot = res.get("slot") or slot or "slot_2"
+    return f"📴 已向卡槽 [{used_slot}] 下发挂断指令。"
+
+@mcp.tool()
+def cellular_send_sms(phone: str, content: str, slot: Optional[str] = None, strategy: Optional[str] = "operator_affinity") -> str:
+    """
+    驱动 4G 蜂窝射频向目标手机号主动代发一条短信（支持指定出站卡槽与智能路由分流 AIR-22）。
     
     参数:
       phone: 目标手机号码（如 '+8613800000000' 或 '10010'）
       content: 短信文本正文
-      slot: 可选出站卡槽编号（如 'slot_1', 'slot_2'；缺省自动选择活跃卡槽发送）
+      slot: 可选出站卡槽编号（如 'slot_1', 'slot_2'；缺省自动根据策略优选健康卡槽）
+      strategy: 可选出站分流策略（'operator_affinity' 同网优先[默认], 'round_robin' 轮询, 'signal_best' 强信优先）
     """
     if not phone or not content:
         raise ValueError("手机号和短信正文不能为空")
 
     try:
         driver.start()
-        res = driver.send_sms(phone, content, slot=slot)
+        res = driver.send_sms(phone, content, slot=slot, strategy=strategy or "operator_affinity")
     except Exception as e:
         raise RuntimeError(f"短信下发失败: {e}")
 
-    target_slot_desc = f" [出站卡槽: {slot}]" if slot else ""
+    used_slot = res.get("slot") or slot
+    target_slot_desc = f" [出站卡槽: {used_slot}]" if used_slot else ""
+    strat_desc = f" [策略: {res.get('routed_strategy', strategy)}]" if not slot else ""
     msg = res.get("msg")
     if msg == "QUEUED_TO_BASE_STATION":
-        return f"✅ 短信已成功提交至 4G 基站发送队列！{target_slot_desc} 目标: {phone}，正文: '{content}'"
-    return f"ℹ️ 蜂窝基带反馈{target_slot_desc}: {res}"
+        return f"✅ 短信已成功提交至 4G 基站发送队列！{target_slot_desc}{strat_desc} 目标: {phone}，正文: '{content}'"
+    return f"ℹ️ 蜂窝基带反馈{target_slot_desc}{strat_desc}: {res}"
 
 @mcp.tool()
 def cellular_get_history(limit: int = 20, keyword: Optional[str] = None, slot: Optional[str] = None) -> str:
@@ -280,7 +364,12 @@ def resource_gateway_status() -> str:
 def resource_latest_sms() -> str:
     """提供最新一条收到的短信详情。"""
     driver.start()
-    hist = driver.get_history(limit=1)
+    try:
+        hist = driver.get_history(limit=1)
+    except PermissionError:
+        return "⚠️ AI 智能体通信服务已在控制台中关闭，无法访问短信黑匣子资源。"
+    except Exception as e:
+        return f"读取短信失败: {e}"
     items = hist.get("items", [])
     if not items:
         return "暂无收到任何短信记录"
@@ -291,7 +380,13 @@ def resource_latest_sms() -> str:
 def resource_sms_history() -> str:
     """提供模组板载脱机黑匣子短信存档的只读数据流。"""
     driver.start()
-    return json.dumps(driver.get_history(limit=50), ensure_ascii=False, indent=2)
+    try:
+        hist = driver.get_history(limit=50)
+        return json.dumps(hist, ensure_ascii=False, indent=2)
+    except PermissionError:
+        return json.dumps({"ok": False, "error": "⚠️ AI 智能体通信服务已在控制台中关闭，无法访问短信黑匣子资源。"}, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False, indent=2)
 
 # ==================== 3. MCP Prompts (工作流模版) ====================
 

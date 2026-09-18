@@ -1,6 +1,6 @@
 PROJECT = "Air780EPV_Gateway"
-VERSION = "1.2.4"
-local BUILD_ID = "hardware-gateway-r1-20260912"
+VERSION = "1.2.9"
+local BUILD_ID = "hardware-gateway-r1-20260915"
 _G.GATEWAY_VERSION = VERSION
 log.setLevel(2) -- INFO 级别
 log.style(0) -- 纯文本风格输出，避免合宙上位机私有二进制帧干扰通信
@@ -108,7 +108,8 @@ local function build_status_report()
     local temp = model.temp() or "未知"
     local vbat = model.vbat() or "未知"
     local info_lines = {
-        string.format("设备ID：%s", model.bsp() or "未知"),
+        string.format("设备型号：%s", model.bsp() or "未知"),
+        string.format("唯一IMEI：%s", model.imei() or "未知"),
         string.format("号码：%s", num_str),
         string.format("信号：CSQ %s (RSRP %s dBm)", csq, rsrp),
         string.format("版本：%s (v%s)", model.os(), VERSION),
@@ -126,6 +127,9 @@ local function trigger_gateway_ready()
     local raw_num = mobile and mobile.number and mobile.number() or nil
     serial_comm.publish("gateway_ready", {
         bsp = model.bsp() or "未知",
+        model = model.bsp() or "未知",
+        imei = model.imei(),
+        iccid = model.iccid(),
         number = raw_num,
         formatted_number = format_phone_number(raw_num),
         csq = mobile and mobile.csq and mobile.csq() or nil,
@@ -169,7 +173,21 @@ sys.subscribe("SIM_IND", function(status, value)
         if led and led.network then
             led.network(1)
         end
-        sys.timerStart(trigger_gateway_ready, 1500)
+        if not gateway_state.boot_notified then
+            sys.timerStart(trigger_gateway_ready, 1500)
+        else
+            sys.timerStart(function()
+                serial_comm.publish("status", {
+                    csq = mobile and mobile.csq and mobile.csq() or nil,
+                    rsrp = mobile and mobile.rsrp and mobile.rsrp() or nil,
+                    net_ready = true,
+                    temp = model.temp(),
+                    vbat = model.vbat(),
+                    rndis = gateway_state.rndis_active,
+                    cellular_data = gateway_state.data_active
+                })
+            end, 1500)
+        end
     end
 end)
 sys.subscribe("IP_READY", function(ip, adapter)
@@ -207,6 +225,10 @@ sys.subscribe("SERIAL_CMD", function(cmd_packet)
         end
         serial_comm.send_response(cmd_packet.id, 0, "STATUS_OK", {
             bsp = model.bsp(),
+            model = model.bsp(),
+            imei = model.imei(),
+            sn = model.sn(),
+            iccid = model.iccid(),
             csq = mobile and mobile.csq and mobile.csq() or nil,
             rsrp = mobile and mobile.rsrp and mobile.rsrp() or nil,
             temp = model.temp(),
@@ -230,11 +252,21 @@ sys.subscribe("SERIAL_CMD", function(cmd_packet)
             uptime_seconds = rb_stat.uptime_seconds,
             daily_reboot_hour = rb_stat.daily_reboot_hour,
             daily_reboot_desc = rb_stat.next_reboot_desc,
+            store_on_board = (fskv and fskv.get("store_on_board")) ~= 0 and 1 or 0,
             lua_mem_kb = math.floor(collectgarbage("count"))
         })
     elseif cmd_packet.cmd == "get_uptime" then
         local rb_stat = reboot_service.get_status()
         serial_comm.send_response(cmd_packet.id, 0, "UPTIME_OK", rb_stat)
+    elseif cmd_packet.cmd == "set_storage_policy" then
+        local data = cmd_packet.data or cmd_packet.params or {}
+        local val = data.store_on_board
+        local store_on_board = (val == 0 or val == false or val == "0") and 0 or 1
+        if fskv then fskv.set("store_on_board", store_on_board) end
+        log.info("main", "store_on_board policy set to:", store_on_board)
+        serial_comm.send_response(cmd_packet.id, 0, "STORAGE_POLICY_UPDATED", {
+            store_on_board = store_on_board
+        })
     elseif cmd_packet.cmd == "set_reboot_policy" then
         local data = cmd_packet.data or cmd_packet.params or {}
         local hour_val = data.hour
@@ -275,6 +307,9 @@ sys.subscribe("SERIAL_CMD", function(cmd_packet)
             local raw_num = mobile and mobile.number and mobile.number() or nil
             serial_comm.publish("state_change", {
                 bsp = model.bsp(),
+                model = model.bsp(),
+                imei = model.imei(),
+                iccid = model.iccid(),
                 number = raw_num,
                 formatted_number = format_phone_number(raw_num),
                 csq = mobile and mobile.csq and mobile.csq() or nil,
@@ -308,6 +343,9 @@ sys.subscribe("SERIAL_CMD", function(cmd_packet)
             local raw_num = mobile and mobile.number and mobile.number() or nil
             serial_comm.publish("state_change", {
                 bsp = model.bsp(),
+                model = model.bsp(),
+                imei = model.imei(),
+                iccid = model.iccid(),
                 number = raw_num,
                 formatted_number = format_phone_number(raw_num),
                 csq = mobile and mobile.csq and mobile.csq() or nil,
@@ -357,4 +395,6 @@ sys.timerLoopStart(function()
     collectgarbage("collect")
 end, 30000)
 log.info("main", "Air780EPV Smart Gateway Bootstrapped, entering sys.run()")
+-- 开机保底主动握手：开机 2 秒后主动向串口发射 gateway_ready 首帧，确保上位机无卡或搜网态均可瞬间识别
+sys.timerStart(trigger_gateway_ready, 2000)
 sys.run()

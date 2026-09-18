@@ -16,6 +16,13 @@ import webbrowser
 import argparse
 import shutil
 import subprocess
+import gateway_runtime as runtime
+
+# Explicit build verification exits before desktop mutex, browser, tray or Hub startup.
+if __name__ == "__main__" and len(sys.argv) == 3 and sys.argv[1] == "--verify-web":
+    from gateway_package_check import verify_web
+    verify_web(sys.argv[2])
+    raise SystemExit(0)
 
 # 确保在 Windows 下标准输出为 UTF-8，且在 windowed 模式下有安全回退流
 class _SafeStream:
@@ -48,9 +55,7 @@ def get_bundle_dir() -> str:
 
 def get_config_dir() -> str:
     """获取可写配置持久化目录 (始终位于 exe 或主脚本同级)"""
-    if getattr(sys, "frozen", False):
-        return os.path.dirname(sys.executable)
-    return os.path.dirname(os.path.abspath(__file__))
+    return runtime.directory("dataDir")
 
 # 引入中枢核心与 Web 服务器
 from gateway_hub import GatewayHub, HUB_HOST, HUB_PORT, SERIAL_PORT, SERIAL_BAUD, show_windows_toast
@@ -60,7 +65,7 @@ _app_mutex = None
 
 def _log_debug(msg: str):
     try:
-        log_file = os.path.join(get_config_dir(), "gateway_app.log")
+        log_file = os.path.join(runtime.directory("logDir"), "gateway_app.log")
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
     except Exception:
@@ -286,12 +291,7 @@ class GatewayDesktopApp:
                 pass
         if self.hub:
             try:
-                self.hub.running = False
-                if self.hub.server_sock:
-                    self.hub.server_sock.close()
-                with self.hub.serial_lock:
-                    if self.hub.ser:
-                        self.hub.ser.close()
+                self.hub.stop()
             except Exception:
                 pass
 

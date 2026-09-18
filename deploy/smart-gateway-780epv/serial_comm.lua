@@ -4,6 +4,11 @@ local rx_cache = ""
 local session_id = string.format("boot_%d_%d", os.time(), math.random(1000, 9999))
 local event_sequence = 0
 local MAX_FRAME_BYTES = 65536
+local last_rx_time = 0
+
+function M.is_connected()
+    return (os.time() - last_rx_time) < 10
+end
 
 local function next_event_id(event_name)
     event_sequence = event_sequence + 1
@@ -79,9 +84,14 @@ function M.init()
                 local succ, obj = false, nil
                 if #line <= MAX_FRAME_BYTES then succ, obj = pcall(json.decode, line) end
                 if succ and type(obj) == "table" then
+                    last_rx_time = os.time()
                     log.info("serial", "CMD received:", command_log_summary(obj))
                     if obj.type == "cmd" and obj.cmd == "ping" then
                         M.send_response(obj.id, 0, "pong", { time = os.time() })
+                    elseif obj.type == "cmd" and obj.cmd == "sms_store_ack" then
+                        local ack_id = (obj.data and obj.data.id) or (obj.params and obj.params.id) or obj.id
+                        log.info("serial", "sms_store_ack received for:", ack_id)
+                        sys.publish("SMS_STORE_ACK", ack_id)
                     elseif obj.type == "cmd" then
                         sys.publish("SERIAL_CMD", obj)
                     else

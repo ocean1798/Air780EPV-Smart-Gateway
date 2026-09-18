@@ -2,7 +2,7 @@
 
 <div align="center">
 
-[![Release](https://img.shields.io/badge/Release-v1.2.5-brightgreen.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/Release-v1.2.9-brightgreen.svg)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Hardware](https://img.shields.io/badge/SoC-Air780EPV%20%28EC718P--V%29%20%7C%20Air780E%20%28EC618%29-orange.svg)](#hardware-compatibility)
 [![Firmware](https://img.shields.io/badge/Firmware-LuatOS--SoC%20V2001-red.svg)](#firmware-download)

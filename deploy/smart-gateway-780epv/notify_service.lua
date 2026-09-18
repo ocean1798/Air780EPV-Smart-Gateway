@@ -1,5 +1,6 @@
 local M = {}
 local config = require "config"
+local model = require "model"
 local serial_comm = require "serial_comm"
 local current_config = nil
 local function is_enabled(val)
@@ -58,8 +59,9 @@ function M.get_masked_config()
 end
 local function format_message(msg_type, from, text, extra)
     local title, plain_text, md_text = "", "", ""
-    local dev_tail = "\r\n\r\n设备ID: Air780EPV"
-    local md_tail = "\n\n> 设备ID: Air780EPV"
+    local dev_label = (model and model.device_label and model.device_label()) or (model and model.bsp and model.bsp()) or "Air780"
+    local dev_tail = "\r\n\r\n设备: " .. dev_label .. " （4G蜂窝直推）"
+    local md_tail = "\n\n> **设备来源**: " .. dev_label .. " （4G蜂窝直推）"
     local sender = from or "未知"
     local content = text or ""
     if msg_type == "sms" then
@@ -113,12 +115,24 @@ local function push_dingtalk(cfg, title, plain_text, md_text)
     return json.encode({ msgtype = "markdown", markdown = { title = title, text = md_text } })
 end
 local function push_bark(cfg, title, plain_text, extra)
-    local payload = { title = title, body = plain_text, group = cfg.group or "Air780EPV", sound = cfg.sound or "minuet" }
+    local bsp_name = (model and model.bsp and model.bsp()) or "Air780"
+    local payload = { title = title, body = plain_text, group = cfg.group or bsp_name, sound = cfg.sound or "minuet" }
     if extra and #extra > 0 then payload.copy = extra end
     return json.encode(payload)
 end
 local function push_webhook(cfg, msg_type, from, text, extra)
-    return json.encode({ device = "Air780EPV", type = msg_type, from = from, content = text, otp = extra or "", timestamp = os.time() })
+    local dev_name = (model and model.bsp and model.bsp()) or "Air780"
+    local imei_str = (model and model.imei and model.imei()) or ""
+    return json.encode({
+        device = dev_name,
+        imei = imei_str,
+        type = msg_type,
+        from = from,
+        content = text,
+        otp = extra or "",
+        timestamp = os.time(),
+        source_mode = "cellular_direct"
+    })
 end
 local function dispatch_channel(name, url, post_body, msg_id)
     if not url or #url == 0 or not post_body or #post_body == 0 then return end

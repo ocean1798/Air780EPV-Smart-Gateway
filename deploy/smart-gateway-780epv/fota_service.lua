@@ -44,7 +44,7 @@ local function execute_fota_task(source, caller, custom_url)
         sys.wait(1000)
         count = count + 1
     end
-    local local_ver = _G.GATEWAY_VERSION or "1.2.4"
+    local local_ver = _G.GATEWAY_VERSION or "1.2.9"
     serial_comm.publish("fota_status", { status = "checking", source = source, caller = caller, current_version = local_ver })
     local fota_cfg = (config and config.fota) or {}
     local version_url = custom_url or (fskv and fskv.get("fota_version_url")) or fota_cfg.version_url or "http://your-bucket-domain.clouddn.com/version.json"
@@ -173,6 +173,156 @@ end
 function M.get_status()
     return { capability = FOTA_CAPABILITY, version_confirmed = false, is_running = fota_state.is_running, last_trigger_time = fota_state.last_trigger_time, last_source = fota_state.last_source, last_caller = fota_state.last_caller, version = _G.GATEWAY_VERSION or "unknown" }
 end
+local serial_ota_state = {
+    is_active = false,
+    expected_size = 0,
+    expected_md5 = "",
+    total_chunks = 0,
+    received_chunks = 0,
+    received_bytes = 0,
+    file_path = "/update.sota",
+    fd = nil
+}
+
+function M.handle_serial_ota(cmd_packet)
+    local cmd = cmd_packet.cmd
+    local data = cmd_packet.data or cmd_packet.params or {}
+    local req_id = cmd_packet.id
+
+    if cmd == "ota_start" then
+        if serial_ota_state.is_active and serial_ota_state.fd then
+            io.close(serial_ota_state.fd)
+            serial_ota_state.fd = nil
+        end
+        if io.exists(serial_ota_state.file_path) then
+            os.remove(serial_ota_state.file_path)
+        end
+        local fd = io.open(serial_ota_state.file_path, "wb")
+        if not fd then
+            return serial_comm.send_response(req_id, -1001, "FILE_OPEN_FAILED", { error = "Cannot open /update.sota" })
+        end
+        serial_ota_state.is_active = true
+        serial_ota_state.fd = fd
+        serial_ota_state.expected_size = tonumber(data.size) or 0
+        serial_ota_state.expected_md5 = tostring(data.md5 or ""):lower()
+        serial_ota_state.total_chunks = tonumber(data.total_chunks) or 0
+        serial_ota_state.received_chunks = 0
+        serial_ota_state.received_bytes = 0
+        log.info("fota", "Serial OTA started, size:", serial_ota_state.expected_size, "chunks:", serial_ota_state.total_chunks)
+        return serial_comm.send_response(req_id, 0, "OTA_READY", {
+            ready = true,
+            chunk_size = 2048
+        })
+
+    elseif cmd == "ota_chunk" then
+        if not serial_ota_state.is_active or not serial_ota_state.fd then
+            return serial_comm.send_response(req_id, -1002, "NOT_IN_OTA", { error = "No active serial OTA session" })
+        end
+        local chunk_idx = tonumber(data.index) or 0
+        local b64_payload = data.data or ""
+        if #b64_payload == 0 then
+            return serial_comm.send_response(req_id, -1003, "EMPTY_PAYLOAD", { error = "Chunk payload is empty" })
+        end
+        local bin_chunk = crypto and crypto.base64_decode and crypto.base64_decode(b64_payload)
+        if not bin_chunk then
+            return serial_comm.send_response(req_id, -1004, "BASE64_DECODE_ERR", { error = "Failed to decode chunk" })
+        end
+        local write_ok = serial_ota_state.fd:write(bin_chunk)
+        if not write_ok then
+            return serial_comm.send_response(req_id, -1005, "WRITE_FAILED", { error = "Failed to write chunk to flash" })
+        end
+        serial_ota_state.received_chunks = serial_ota_state.received_chunks + 1
+        serial_ota_state.received_bytes = serial_ota_state.received_bytes + #bin_chunk
+        return serial_comm.send_response(req_id, 0, "CHUNK_ACK", {
+            index = chunk_idx,
+            received_bytes = serial_ota_state.received_bytes
+        })
+
+    elseif cmd == "ota_finish" then
+        if not serial_ota_state.is_active or not serial_ota_state.fd then
+            return serial_comm.send_response(req_id, -1002, "NOT_IN_OTA", { error = "No active serial OTA session" })
+        end
+        io.close(serial_ota_state.fd)
+        serial_ota_state.fd = nil
+        serial_ota_state.is_active = false
+
+        -- 必须在协程中执行 Flash 写入与等待，避免在回调上下文调用 sys.wait() 产生异常
+        sys.taskInit(function()
+            local file_path = serial_ota_state.file_path
+            local actual_md5 = ""
+            if crypto and crypto.md_file then
+                local ok, h = pcall(crypto.md_file, "MD5", file_path)
+                if ok and h then actual_md5 = h:lower() end
+            end
+
+            if serial_ota_state.expected_md5 ~= "" and actual_md5 ~= "" and actual_md5 ~= serial_ota_state.expected_md5 then
+                log.error("fota", "MD5 mismatch:", actual_md5, "vs", serial_ota_state.expected_md5)
+                os.remove(file_path)
+                return serial_comm.send_response(req_id, -1006, "MD5_MISMATCH", {
+                    expected = serial_ota_state.expected_md5,
+                    actual = actual_md5
+                })
+            end
+
+            log.info("fota", "Starting FOTA burn from:", file_path)
+            if fota and fota.init and fota.init() then
+                local t_start = os.clock()
+                local wait_ok = true
+                while not fota.wait() do
+                    if os.clock() - t_start > 30 then wait_ok = false break end
+                    sys.wait(100)
+                end
+                if wait_ok then
+                    local res = fota.file(file_path)
+                    if res then
+                        local burn_succ = false
+                        while true do
+                            local succ, done = fota.isDone()
+                            if not succ then fota.finish(false) break end
+                            if done then fota.finish(true) burn_succ = true break end
+                            sys.wait(200)
+                        end
+                        if burn_succ then
+                            os.remove(file_path)
+                            serial_comm.send_response(req_id, 0, "UPGRADE_SUCCESS", {
+                                will_reboot = true,
+                                msg = "FOTA burn complete, module will reboot in 1.5s"
+                            })
+                            sys.timerStart(function()
+                                log.info("fota", "Rebooting module to apply updated firmware...")
+                                if rtos and rtos.reboot then rtos.reboot() end
+                            end, 1500)
+                            return
+                        else
+                            fota.finish(false)
+                        end
+                    else
+                        fota.finish(false)
+                    end
+                else
+                    fota.finish(false)
+                end
+            end
+
+            os.remove(file_path)
+            serial_comm.send_response(req_id, -1007, "FOTA_FLASH_FAILED", {
+                error = "Underlying fota.file failed to write Flash"
+            })
+        end)
+        return
+    elseif cmd == "ota_abort" then
+        if serial_ota_state.fd then
+            io.close(serial_ota_state.fd)
+            serial_ota_state.fd = nil
+        end
+        serial_ota_state.is_active = false
+        if io.exists(serial_ota_state.file_path) then
+            os.remove(serial_ota_state.file_path)
+        end
+        return serial_comm.send_response(req_id, 0, "ABORTED", { ok = true })
+    end
+end
+
 function M.init()
     sys.subscribe("SYS_TRIGGER_FOTA", function(source, caller, custom_url) M.trigger(source, caller, custom_url) end)
     sys.subscribe("SERIAL_CMD", function(cmd_packet)
@@ -183,8 +333,10 @@ function M.init()
             serial_comm.send_response(cmd_packet.id, accepted and 0 or -409, accepted and "FOTA_TRIGGERED" or "FOTA_CAPABILITY_UNKNOWN", M.get_status())
         elseif cmd_packet.cmd == "get_fota_status" then
             serial_comm.send_response(cmd_packet.id, 0, "OK", M.get_status())
+        elseif cmd_packet.cmd == "ota_start" or cmd_packet.cmd == "ota_chunk" or cmd_packet.cmd == "ota_finish" or cmd_packet.cmd == "ota_abort" then
+            M.handle_serial_ota(cmd_packet)
         end
     end)
-    log.info("fota", "init v" .. (_G.GATEWAY_VERSION or "1.2.4"))
+    log.info("fota", "init v" .. (_G.GATEWAY_VERSION or "1.2.9"))
 end
 return M

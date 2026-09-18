@@ -12,6 +12,12 @@ gateway_config.json
 **/gateway_config.json
 !gateway_config.example.json
 !**/gateway_config.example.json
+gateway_history.json
+**/gateway_history.json
+.hub_session_token
+**/.hub_session_token
+cards/
+**/cards/
 qiniu_config.json
 **/qiniu_config.json
 !tools/qiniu_config.example.json

@@ -58,10 +58,11 @@ def get_file_md5(filepath):
             h.update(chunk)
     return h.hexdigest()
 
-def compile_source_to_luadb(src_dir: str, target_version: str = None) -> bytes:
+def compile_source_to_luadb(src_dir: str, target_version: str = None, domain: str = None) -> bytes:
     """
     将部署目录下的 Lua 源文件使用 luac_536.exe -s (Stripped) 编译为无调试符号的 luac 字节码，
     并组装成符合合宙标准规范的 64KB LuaDB 二进制包。
+    动态将开源脱敏占位符 (your-bucket-domain) 替换为当前运行配置中的真实 CDN 域名。
     """
     if not os.path.exists(LUAC_EXE):
         raise FileNotFoundError(f"未找到 luac_536.exe: {LUAC_EXE}")
@@ -75,17 +76,22 @@ def compile_source_to_luadb(src_dir: str, target_version: str = None) -> bytes:
             if not os.path.exists(src_path):
                 raise FileNotFoundError(f"项目必须文件缺失: {src_path}")
             
-            # 若传入 target_version，动态临时修补 main.lua、fota_service.lua 与 config.lua 中的版本号定义
+            # 若传入 target_version 或 domain，动态临时修补 main.lua、fota_service.lua 与 config.lua
             file_to_compile = src_path
-            if fn in ("main.lua", "fota_service.lua", "config.lua") and target_version:
+            if fn in ("main.lua", "fota_service.lua", "config.lua"):
                 with open(src_path, "r", encoding="utf-8") as sf:
                     content = sf.read()
-                if fn == "main.lua":
-                    content = re.sub(r'VERSION\s*=\s*"[^"]+"', lambda m: f'VERSION = "{target_version}"', content)
-                elif fn == "fota_service.lua":
-                    content = re.sub(r'local local_ver = _G\.GATEWAY_VERSION or "[^"]+"', lambda m: f'local local_ver = _G.GATEWAY_VERSION or "{target_version}"', content)
-                elif fn == "config.lua":
-                    content = re.sub(r'_G\.GATEWAY_VERSION\s*=\s*"[^"]+"', lambda m: f'_G.GATEWAY_VERSION = "{target_version}"', content)
+                if target_version:
+                    if fn == "main.lua":
+                        content = re.sub(r'VERSION\s*=\s*"[^"]+"', lambda m: f'VERSION = "{target_version}"', content)
+                    elif fn == "fota_service.lua":
+                        content = re.sub(r'local local_ver = _G\.GATEWAY_VERSION or "[^"]+"', lambda m: f'local local_ver = _G.GATEWAY_VERSION or "{target_version}"', content)
+                    elif fn == "config.lua":
+                        content = re.sub(r'_G\.GATEWAY_VERSION\s*=\s*"[^"]+"', lambda m: f'_G.GATEWAY_VERSION = "{target_version}"', content)
+                if domain:
+                    clean_domain = domain.rstrip("/")
+                    content = content.replace("http://your-bucket-domain.clouddn.com", clean_domain)
+                    content = content.replace("https://your-bucket-domain.clouddn.com", clean_domain)
                 tmp_src = os.path.join(tmpdir, fn)
                 with open(tmp_src, "w", encoding="utf-8") as tf:
                     tf.write(content)
@@ -314,8 +320,8 @@ def main():
         with open(args.bin, "rb") as f:
             raw_bin_data = f.read()
     else:
-        print(f">>> 从项目源码目录编译 Stripped 字节码并组装 LuaDB...")
-        raw_bin_data = compile_source_to_luadb(args.src_dir, target_version=args.version)
+        print(f">>> 从项目源码目录编译 Stripped 字节码并组装 LuaDB (动态注入 CDN: {domain})...")
+        raw_bin_data = compile_source_to_luadb(args.src_dir, target_version=args.version, domain=domain)
 
     # 2. 封装为标准 EC718P SOTA 包
     ota_pkg_bytes, diag = build_fota_package(raw_bin_data, args.version)

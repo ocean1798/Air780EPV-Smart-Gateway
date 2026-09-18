@@ -1,4 +1,4 @@
-_G.GATEWAY_VERSION = "1.2.4"
+_G.GATEWAY_VERSION = "1.2.9"
 return {
     network = {
         dns = {
@@ -45,8 +45,8 @@ return {
         daily_reboot_hour = -1
     },
     fota = {
-        version_url = "http://your-bucket-domain.clouddn.com/version.json",
-        default_bin_url = "http://your-bucket-domain.clouddn.com/script.bin",
+        version_url = "http://your-bucket.hd-bkt.clouddn.com/version.json",
+        default_bin_url = "http://your-bucket.hd-bkt.clouddn.com/script.bin",
         trigger_callers = {
             "13800138000",
             "*"

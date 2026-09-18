@@ -26,5 +26,12 @@
     "enable": 0,
     "url": "",
     "method": "POST"
+  },
+  "fota": {
+    "version_url": "http://your-bucket-domain.clouddn.com/version.json"
+  },
+  "mcp": {
+    "enabled": false,
+    "port": 17800
   }
 }

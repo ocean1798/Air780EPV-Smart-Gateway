@@ -49,12 +49,14 @@ function storage.append_sms(sender, content, otp_code, timestamp, msg_id)
     if current_count >= MAX_RECORDS then
         prune_old_records()
     end
+    local model = require "model"
     local record = {
         sender = sender or "",
         content = content or "",
         otp = otp_code or "",
         time = timestamp or os.time(),
-        id = msg_id
+        id = msg_id,
+        iccid = model.iccid and model.iccid() or ""
     }
     local ok, json_str = pcall(json.encode, record)
     if not ok or not json_str then return false end

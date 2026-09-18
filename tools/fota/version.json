@@ -1,9 +1,9 @@
 {
   "project": "smart_cellular_gateway",
-  "version": "1.2.5",
-  "build_time": "2026-09-12 19:01:03",
-  "url": "http://your-bucket-domain.clouddn.com/script.bin",
-  "size": 19084,
-  "md5": "0003e7de7739ff57bc0dbed7181ed92e",
-  "changelog": "正式验证真机 FOTA 空中刷写与自动重启"
+  "version": "1.2.9",
+  "build_time": "2026-09-17 15:30:00",
+  "url": "http://your-bucket.hd-bkt.clouddn.com/script.bin",
+  "size": 22896,
+  "md5": "97a50942e924ffe991bebe2552afc1b1",
+  "changelog": "支持单卡/多卡 VoLTE 电话拨号与硬件能力自适应，板端集成 15s 自动挂机防扣费看门狗"
 }
