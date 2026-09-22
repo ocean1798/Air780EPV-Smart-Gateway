@@ -6,10 +6,7 @@
 
 1. **真实硬件生命力 (Physical Tactility)**：界面状态必须 100% 映射真实硬件的物理射频与芯片状态，严禁伪造假数据、假进度与离线假成功弹窗；
 2. **大白话去工程化 (Humanized Precision)**：面向日常真实使用场景，严禁堆砌研发内部术语（如 `Slot1`、`LittleFS`、`CSQ 28`、`FIFO`、`软复位`），统一以普通人一目了然的大白话呈现；
-3. **双主题无缝共生 (Dual-Theme Architecture)**：
-   - **经典控制台主题 (`classic`)**：稳重、工整、高信息密度的极客暗黑管理控制台；
-   - **灵动岛空间拟物主题 (`island`)**：引入 iPhone 灵动岛交互范式与 Apple 空间微拟物折射质感，兼具把玩乐趣与极简优雅；
-   - 两套主题共享同一底层通信数据驱动管线，支持用户在界面一键秒级热切换并本地记忆。
+3. **固定经典界面 (`classic`)**：AIR-40 按用户决定移除顶部和设置中的主题切换，旧 island 偏好启动时归为 classic。经典验证码展示、来源、高亮与复制保留。下文 island 专属 Tokens、动效和控制器保留作旧实现说明，当前界面不启用。
 
 ---
 
@@ -50,7 +47,7 @@
 
 ## 3. 核心交互组件规范
 
-### 3.1 顶部灵动通信岛 (`#dynamicIsland`)
+### 3.1 顶部灵动通信岛（旧实现，AIR-40 后不启用）
 灵动岛位于页面顶栏正中央，作为核心通信状态枢纽，受 `DynamicIslandController` 严格状态机驱动：
 1. **待机态 (IDLE)**：
    - 形状：悬浮圆角药丸（高度 36px，宽度自适应 200px~260px）；
@@ -85,8 +82,25 @@
 
 ---
 
-## 4. 主题切换与持久化规范
+## 4. 固定经典界面与卡片交互
 
-1. **主题存储**：键名 `cellular_gateway_theme`，枚举值 `classic` | `island`，默认值 `classic`（保证既有用户无感过渡）；
-2. **根节点驱动**：通过 `document.documentElement.setAttribute('data-theme', theme)` 统一分发；
-3. **切换入口**：在顶栏右侧与系统设置抽屉中提供高保真切换开关（`🎨 视觉风格: 经典控制台 / 灵动岛空间`），点击即刻无缝丝滑重绘，不丢失当前网络长连接与收件箱状态。
+1. 初始化将根节点 `data-theme` 和 `cellular_gateway_theme` 设为 `classic`，不恢复旧 island 值；顶部与设置均无主题切换入口。
+2. 设备列表预留稳定滚动槽；不支持 `scrollbar-gutter` 时使用常驻纵向滚动条，展开/折叠不会改变卡片宽度。
+3. 原生拖动时其他卡片通过180ms FLIP让位，减少动态效果模式直接换位；有效投放才保存，取消恢复开始顺序。落点使用布局坐标，快速重复事件不反复重排同一顺序。
+4. 卡片及动作按稳定 slot 绑定，排序只移动节点，保留展开态；拖动期间完整列表及状态事件按到达顺序暂存，结束后回放。设备计数沿 AIR-39 规则，不与电脑归档混用。
+5. 双工程 HTML 保持字节一致；来源与本次验证边界见 `../changes/0040-优化-设备卡片布局与排序交互/tasks.md`。AIR-40 源码、隔离预览及用户后续授权的现役桌面替换已接受；发布摘要、数据保留核对与备份入口见该 Change。
+
+## 5. 前端核心组件基础设施契约
+
+1. **ThemeManager（经典界面初始化）**：
+   - 保留 `current`、`init()`；初始化固定 classic，并广播 `EventBus.emit("theme:changed", "classic")`。
+   - 不再提供用户主题切换方法或控件。
+2. **EventBus（轻量事件总线）**：
+   - 暴露 `on(event, handler)`、`emit(event, data)`，实现串口/网络底层与 UI 组件解耦。
+3. **DynamicIslandController（灵动通信岛控制器）**：
+   - 暴露 `init()`、`updateIdleSlots(slots)`、`expand(data)`、`collapse()`、`handleClick()`、`startCollapseTimer(seconds)`；
+   - 内置 `isPaused` 悬停保护看门狗，鼠标悬停时冻结 10 秒回缩计时。
+4. **FeedFormatter（消息排版与签名提炼器）**：
+   - 暴露 `extractSender(content, fallbackSender)` 与 `highlightOtpInContent(content, otp)`；
+   - 正文前缀 `【机构】` 自动提炼为大字号展示，正文内验证码动态加注 `.otp-text-highlight` 支持秒级直写剪贴板。
+

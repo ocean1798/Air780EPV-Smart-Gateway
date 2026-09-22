@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="classic">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -33,6 +33,372 @@
       box-sizing: border-box;
       margin: 0;
       padding: 0;
+    }
+
+    /* 6px 极窄半透明暗黑滚动条规范 (消灭 Windows 原生粗白滑块) */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.14);
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.32);
+    }
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+    }
+
+    /* =========================================================
+       双主题架构与 iPhone 灵动岛 (Dynamic Island) 样式规范
+       ========================================================= */
+    /* 灵动岛空间主题变量覆盖 */
+    [data-theme="island"] {
+      --bg-primary: #070a13;
+      --bg-surface: rgba(15, 23, 42, 0.78);
+      --bg-card: rgba(30, 41, 59, 0.7);
+      --bg-card-hover: rgba(51, 65, 85, 0.8);
+      --border-color: rgba(255, 255, 255, 0.11);
+      --border-highlight: rgba(14, 165, 233, 0.6);
+    }
+
+    [data-theme="island"] body {
+      background-color: #070a13;
+      background-image: 
+        radial-gradient(at 12% 15%, rgba(30, 58, 138, 0.25) 0px, transparent 50%),
+        radial-gradient(at 88% 85%, rgba(15, 43, 72, 0.3) 0px, transparent 55%);
+      background-attachment: fixed;
+    }
+
+    /* 经典模式下彻底隐藏灵动岛容器 */
+    html[data-theme="classic"] .dynamic-island-container,
+    html:not([data-theme="island"]) .dynamic-island-container {
+      display: none !important;
+    }
+
+    /* 灵动岛模式下隐藏原有的静态最新验证码胶囊 */
+    html[data-theme="island"] .top-otp-capsule {
+      display: none !important;
+    }
+
+    /* 灵动通信岛容器 */
+    .dynamic-island-container {
+      position: absolute;
+      top: 7px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 1000;
+      pointer-events: none;
+    }
+
+    /* 灵动通信岛主体 (Dynamic Island Capsule) */
+    .dynamic-island {
+      pointer-events: auto;
+      background: #000000;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7), 0 0 1px rgba(255, 255, 255, 0.3) inset;
+      border-radius: 9999px;
+      height: 38px;
+      min-width: 240px;
+      max-width: min(440px, calc(100vw - 24px));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      overflow: hidden;
+      transition: all 0.38s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+      user-select: none;
+    }
+
+    .dynamic-island:hover {
+      border-color: rgba(255, 255, 255, 0.3);
+      box-shadow: 0 12px 35px rgba(0, 0, 0, 0.85), 0 0 12px rgba(56, 189, 248, 0.2);
+    }
+
+    /* 待机态内容 */
+    .island-view-idle {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      padding: 0 1rem;
+      width: 100%;
+      height: 100%;
+      font-size: 0.75rem;
+      color: #f8fafc;
+      white-space: nowrap;
+    }
+    .island-idle-left {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+    .island-slot-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #34d399;
+      box-shadow: 0 0 6px rgba(52, 211, 153, 0.8);
+    }
+    .island-slot-dot.offline {
+      background: #64748b;
+      box-shadow: none;
+    }
+    .island-idle-center {
+      flex: 1;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      color: #e2e8f0;
+      text-align: center;
+    }
+    .island-idle-right {
+      display: flex;
+      align-items: center;
+    }
+    .island-breath-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #38bdf8;
+      box-shadow: 0 0 8px #38bdf8;
+      animation: islandBreath 2.4s infinite ease-in-out;
+    }
+    @keyframes islandBreath {
+      0%, 100% { opacity: 0.4; transform: scale(0.9); }
+      50% { opacity: 1; transform: scale(1.15); }
+    }
+
+    /* 展开态 (Active OTP Expansion) */
+    .dynamic-island.expanded {
+      height: 76px;
+      width: min(440px, calc(100vw - 24px));
+      border-radius: 24px;
+      padding: 0.6rem 0.85rem;
+      cursor: default;
+      box-shadow: 0 16px 45px rgba(0, 0, 0, 0.85), 0 0 20px rgba(56, 189, 248, 0.15), 0 1px 0 rgba(255, 255, 255, 0.25) inset;
+    }
+
+    .island-view-active {
+      display: none;
+      width: 100%;
+      height: 100%;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+    }
+    .dynamic-island.expanded .island-view-idle {
+      display: none;
+    }
+    .dynamic-island.expanded .island-view-active {
+      display: flex;
+      animation: fadeIn 0.25s ease forwards;
+    }
+
+    .island-active-left {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      min-width: 0;
+    }
+    .island-key-circle {
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      background: rgba(245, 158, 11, 0.18);
+      border: 1px solid rgba(245, 158, 11, 0.4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.1rem;
+      flex-shrink: 0;
+      animation: bounceIn 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    }
+    @keyframes bounceIn {
+      from { transform: scale(0.6); opacity: 0; }
+      to { transform: scale(1); opacity: 1; }
+    }
+
+    .island-sender-meta {
+      display: flex;
+      flex-direction: column;
+      gap: 0.15rem;
+      overflow: hidden;
+    }
+    .island-tag {
+      font-size: 0.65rem;
+      font-weight: 700;
+      color: #f59e0b;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    .island-sender {
+      font-size: 0.82rem;
+      font-weight: 700;
+      color: #f8fafc;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      overflow: hidden;
+      max-width: 110px;
+    }
+
+    .island-active-center {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+    .island-code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 1.55rem;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      color: #38bdf8;
+      text-shadow: 0 0 15px rgba(56, 189, 248, 0.45);
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .island-code:hover {
+      transform: scale(1.05);
+      color: #7dd3fc;
+    }
+
+    .island-active-right {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      flex-shrink: 0;
+    }
+    .btn-island-copy {
+      background: #0284c7;
+      border: 1px solid #38bdf8;
+      border-radius: 9999px;
+      color: #ffffff;
+      font-size: 0.74rem;
+      font-weight: 700;
+      padding: 0.35rem 0.75rem;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      box-shadow: 0 4px 12px rgba(2, 132, 199, 0.4);
+      white-space: nowrap;
+    }
+    .btn-island-copy:hover {
+      background: #0369a1;
+      transform: translateY(-1px);
+    }
+    .btn-island-close {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.1);
+      border: none;
+      color: #94a3b8;
+      cursor: pointer;
+      font-size: 0.72rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s ease;
+    }
+    .btn-island-close:hover {
+      background: rgba(239, 68, 68, 0.25);
+      color: #f87171;
+    }
+
+    /* 顶栏风格切换按钮 */
+    .btn-theme-toggle {
+      height: 32px;
+      padding: 0 0.65rem;
+      border-radius: var(--radius-pill);
+      border: 1px solid var(--border-color);
+      background: rgba(255, 255, 255, 0.05);
+      color: #e2e8f0;
+      font-size: 0.72rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      transition: all 0.2s ease;
+      white-space: nowrap;
+    }
+    .btn-theme-toggle:hover {
+      background: rgba(255, 255, 255, 0.12);
+      border-color: rgba(255, 255, 255, 0.25);
+      transform: translateY(-1px);
+    }
+
+    /* 设置抽屉主题胶囊选项 */
+    .btn-theme-pill {
+      padding: 0.3rem 0.65rem;
+      font-size: 0.72rem;
+      font-weight: 600;
+      border-radius: var(--radius-pill);
+      border: 1px solid var(--border-color);
+      background: rgba(255, 255, 255, 0.04);
+      color: #94a3b8;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .btn-theme-pill.active {
+      background: #0284c7;
+      border-color: #38bdf8;
+      color: #ffffff;
+      font-weight: 700;
+      box-shadow: 0 2px 8px rgba(2, 132, 199, 0.35);
+    }
+
+    /* [data-theme="island"] 专属空间拟物卡片增强 */
+    [data-theme="island"] .card {
+      background: rgba(15, 23, 42, 0.75) !important;
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.12) !important;
+      box-shadow: 0 1px 0 rgba(255, 255, 255, 0.14) inset, 0 12px 32px rgba(0, 0, 0, 0.55) !important;
+    }
+    [data-theme="island"] .slot-card {
+      background: rgba(255, 255, 255, 0.03) !important;
+      border: 1px solid rgba(255, 255, 255, 0.08) !important;
+      border-radius: var(--radius-md) !important;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    [data-theme="island"] .slot-card:hover {
+      border-color: rgba(56, 189, 248, 0.4) !important;
+      box-shadow: 0 1px 0 rgba(255, 255, 255, 0.18) inset, 0 6px 20px rgba(0, 0, 0, 0.4) !important;
+    }
+    [data-theme="island"] .mini-switch input:checked + .mini-slider {
+      background-color: #10b981 !important; /* iOS 经典绿色 */
+      box-shadow: 0 0 10px rgba(16, 185, 129, 0.5) !important;
+    }
+    [data-theme="island"] .phone-copy-btn:hover {
+      transform: scale(0.98);
+      background: rgba(56, 189, 248, 0.18) !important;
+    }
+
+    /* 短信卡片正文内验证码数字高亮与全域复制 */
+    .otp-text-highlight {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-weight: 800;
+      color: #38bdf8;
+      background: rgba(56, 189, 248, 0.14);
+      padding: 0.1rem 0.35rem;
+      border-radius: 4px;
+      border: 1px dashed rgba(56, 189, 248, 0.4);
+      cursor: pointer;
+      display: inline-block;
+      margin: 0 0.15rem;
+      transition: all 0.15s ease;
+    }
+    .otp-text-highlight:hover {
+      background: rgba(56, 189, 248, 0.28);
+      border-color: #38bdf8;
+      transform: scale(1.04);
+      color: #e0f2fe;
     }
 
     html, body {
@@ -91,6 +457,7 @@
 
     /* 顶部导航 Header (32x32px 小齿轮，顶栏居中最新验证码) */
     header {
+      position: relative;
       height: 52px;
       background: var(--bg-surface);
       border-bottom: 1px solid var(--border-color);
@@ -288,6 +655,8 @@
        左侧：手风琴设备列表独立滚动容器 (避免整页双滚动条)
        ======================================================== */
     .slot-rows-container {
+      position: relative;
+      scrollbar-gutter: stable;
       flex: 1;
       min-height: 0;
       overflow-y: auto;
@@ -295,6 +664,10 @@
       display: flex;
       flex-direction: column;
       gap: 0.65rem;
+    }
+
+    @supports not (scrollbar-gutter: stable) {
+      .slot-rows-container { overflow-y: scroll; }
     }
 
     .slot-rows-container::-webkit-scrollbar {
@@ -333,7 +706,6 @@
 
     .slot-card.dragging {
       opacity: 0.45;
-      transform: scale(0.98);
       border: 1px dashed var(--primary-accent) !important;
     }
 
@@ -959,6 +1331,43 @@
       }
       .top-otp-capsule {
         display: none !important;
+      }
+      [data-theme="island"] header {
+        height: auto !important;
+        min-height: 52px;
+        padding-top: 50px !important;
+        padding-bottom: 6px !important;
+      }
+      .dynamic-island-container {
+        top: max(6px, env(safe-area-inset-top, 6px));
+        width: 100%;
+        display: flex;
+        justify-content: center;
+        padding: 0 12px;
+      }
+      .dynamic-island {
+        min-width: 220px;
+        max-width: calc(100vw - 24px);
+      }
+      .dynamic-island.expanded {
+        width: calc(100vw - 24px);
+        padding: 0.5rem 0.65rem;
+      }
+      .dynamic-island.expanded .island-key-circle {
+        width: 32px;
+        height: 32px;
+        font-size: 0.95rem;
+      }
+      .dynamic-island.expanded .island-code {
+        font-size: 1.25rem;
+      }
+      .dynamic-island.expanded .btn-island-copy {
+        padding: 0.28rem 0.55rem;
+        font-size: 0.68rem;
+      }
+      .dynamic-island.expanded .island-sender {
+        font-size: 0.74rem;
+        max-width: 80px;
       }
       .workspace-grid {
         grid-template-columns: 1fr;
@@ -1810,14 +2219,57 @@
         </div>
       </div>
 
-      <!-- 顶栏居中最新验证码胶囊 -->
+      <!-- 顶栏居中最新验证码胶囊 (经典模式使用) -->
       <div class="top-otp-capsule" id="topOtpCapsule" onclick="copyTopOtp()" title="点击复制最新收到的验证码" style="display: none;">
         <span class="top-otp-title">⚡ 最新验证码:</span>
         <span class="top-otp-code" id="topOtpValue"></span>
         <span class="top-otp-copy-hint" id="topOtpSlotHint">来自通信模组 · 点击复制</span>
       </div>
 
-      <!-- 右端 32x32px 极简小齿轮 -->
+      <!-- iPhone 灵动通信岛 (仅在 data-theme="island" 下激活) -->
+      <div class="dynamic-island-container" id="dynamicIslandContainer">
+        <div class="dynamic-island" id="dynamicIsland" onclick="DynamicIslandController.handleClick()" title="灵动通信岛 (点击展开通信看板)">
+          <!-- 1. 待机态 (Idle Capsule) -->
+          <div class="island-view-idle" id="islandIdle">
+            <div class="island-idle-left">
+              <span style="font-size: 0.75rem;">📶</span>
+              <div id="islandSlotDots" style="display: flex; gap: 3px; align-items: center;">
+                <span class="island-slot-dot" title="卡槽在线"></span>
+              </div>
+            </div>
+            <div class="island-idle-center">
+              <span id="islandIdleText">网关就绪 · 信号极佳</span>
+            </div>
+            <div class="island-idle-right">
+              <span class="island-breath-dot"></span>
+            </div>
+          </div>
+
+          <!-- 2. 验证码展开态 (Active OTP Card) -->
+          <div class="island-view-active" id="islandActive">
+            <div class="island-active-left">
+              <div class="island-key-circle">🔑</div>
+              <div class="island-sender-meta">
+                <span class="island-tag" id="islandActiveTag">验证码</span>
+                <span class="island-sender" id="islandActiveSender">服务平台</span>
+              </div>
+            </div>
+            <div class="island-active-center">
+              <span class="island-code" id="islandActiveCode" onclick="event.stopPropagation(); copyDynamicIslandOtp();" title="点击直接复制验证码">------</span>
+            </div>
+            <div class="island-active-right">
+              <button class="btn-island-copy" id="btnIslandCopy" onclick="event.stopPropagation(); copyDynamicIslandOtp();">
+                📋 复制
+              </button>
+              <button class="btn-island-close" onclick="event.stopPropagation(); DynamicIslandController.collapse();" title="收起灵动岛">
+                ✕
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 右端操作区：设置 -->
       <div class="header-actions">
         <button class="btn-icon-setting" onclick="openSettingsDrawer()" title="网关高级设置">
           <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
@@ -2454,6 +2906,260 @@
     }
 
     // =========================================================
+    // 0.1 全局健壮剪贴板复制工具 (带降级兜底)
+    // =========================================================
+    function copyTextWithFallback(text, successMsg = "已复制到剪贴板") {
+      if (!text) return;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => {
+          showToast(successMsg, "success");
+        }).catch(() => {
+          fallbackExecCopy(text, successMsg);
+        });
+      } else {
+        fallbackExecCopy(text, successMsg);
+      }
+    }
+
+    function fallbackExecCopy(text, successMsg) {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.top = "-9999px";
+        ta.style.left = "-9999px";
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        showToast(successMsg, "success");
+      } catch (err) {
+        showToast("复制失败，请手动选择文字", "danger");
+      }
+    }
+
+    // =========================================================
+    // 0.2 前端轻量事件发布订阅总线 (EventBus)
+    // =========================================================
+    const EventBus = {
+      _handlers: {},
+      on(event, handler) {
+        if (!this._handlers[event]) this._handlers[event] = [];
+        this._handlers[event].push(handler);
+      },
+      emit(event, data) {
+        if (this._handlers[event]) {
+          this._handlers[event].forEach(fn => {
+            try { fn(data); } catch(e) { console.error('EventBus error:', e); }
+          });
+        }
+      }
+    };
+
+    // =========================================================
+    // 0.3 固定经典界面；迁移旧 island 偏好，保留主题事件供既有组件使用
+    // =========================================================
+    const ThemeManager = {
+      KEY: "cellular_gateway_theme",
+      current: "classic",
+      init() {
+        this.current = "classic";
+        document.documentElement.setAttribute("data-theme", "classic");
+        try { localStorage.setItem(this.KEY, "classic"); } catch(e) {}
+        EventBus.emit("theme:changed", "classic");
+      }
+    };
+
+    // =========================================================
+    // 0.4 消息格式化与大白话签名提炼 (FeedFormatter)
+    // =========================================================
+    const FeedFormatter = {
+      extractSender(content, fallbackSender) {
+        if (!content) return { title: fallbackSender, sub: "", isBranded: false };
+        const m = String(content).match(/^【([^】]+)】/);
+        if (m && m[1]) {
+          return {
+            title: m[1].trim(),
+            sub: fallbackSender,
+            isBranded: true
+          };
+        }
+        return { title: fallbackSender, sub: "", isBranded: false };
+      },
+      highlightOtpInContent(content, otp) {
+        if (!otp || !content) return escapeHtml(content);
+        const safeContent = escapeHtml(content);
+        const safeOtp = escapeHtml(otp);
+        const escapedRegex = safeOtp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return safeContent.replace(
+          new RegExp(escapedRegex, "g"),
+          `<span class="otp-text-highlight" onclick="event.stopPropagation(); copyTextWithFallback('${safeOtp}', '已复制验证码: ${safeOtp}')" title="点击直接复制验证码">${safeOtp}</span>`
+        );
+      }
+    };
+
+    // =========================================================
+    // 0.5 iPhone 灵动通信岛控制器 (DynamicIslandController)
+    // =========================================================
+    const DynamicIslandController = {
+      _inited: false,
+      timer: null,
+      isPaused: false,
+      isExpanded: false,
+      lastOtpData: null,
+
+      init() {
+        if (this._inited) return;
+        this._inited = true;
+
+        const el = document.getElementById("dynamicIsland");
+        if (!el) return;
+
+        el.addEventListener("mouseenter", () => {
+          this.isPaused = true;
+        });
+        el.addEventListener("mouseleave", () => {
+          this.isPaused = false;
+        });
+        el.addEventListener("touchstart", () => {
+          this.isPaused = true;
+        }, { passive: true });
+        el.addEventListener("touchend", () => {
+          this.isPaused = false;
+        }, { passive: true });
+
+        EventBus.on("otp:received", (data) => {
+          this.lastOtpData = data;
+          if (ThemeManager.current === "island") {
+            this.expand(data);
+          }
+        });
+
+        EventBus.on("slots:updated", (slots) => {
+          this.updateIdleSlots(slots);
+        });
+
+        document.addEventListener("click", (e) => {
+          if (!this.isExpanded) return;
+          const container = document.getElementById("dynamicIslandContainer");
+          if (container && !container.contains(e.target)) {
+            this.collapse();
+          }
+        });
+      },
+
+      updateIdleSlots(slots) {
+        const dotsBox = document.getElementById("islandSlotDots");
+        const idleText = document.getElementById("islandIdleText");
+        if (!dotsBox) return;
+
+        dotsBox.innerHTML = "";
+        const list = Array.isArray(slots) ? slots : [];
+        const onlineCount = list.filter(s => s.online !== false).length;
+
+        if (list.length === 0) {
+          dotsBox.innerHTML = `<span class="island-slot-dot offline" title="未连接模组"></span>`;
+          if (idleText) idleText.textContent = "网关离线 · 搜索端口中";
+          return;
+        }
+
+        list.forEach(slot => {
+          const dot = document.createElement("span");
+          dot.className = `island-slot-dot ${slot.online === false ? 'offline' : ''}`;
+          dot.title = `${slot.slot || '卡槽'}: ${slot.online === false ? '离线' : '在线'}`;
+          dotsBox.appendChild(dot);
+        });
+
+        if (idleText) {
+          if (onlineCount > 1) {
+            idleText.textContent = `${onlineCount}模组就绪 · 蜂窝监听中`;
+          } else if (onlineCount === 1) {
+            idleText.textContent = "单模组就绪 · 信号极佳";
+          } else {
+            idleText.textContent = "设备已断开连接";
+          }
+        }
+      },
+
+      expand(data) {
+        const el = document.getElementById("dynamicIsland");
+        if (!el) return;
+
+        const codeEl = document.getElementById("islandActiveCode");
+        const senderEl = document.getElementById("islandActiveSender");
+        const tagEl = document.getElementById("islandActiveTag");
+
+        const code = (data && data.code) || "------";
+        const sender = (data && (data.platform || data.sender)) || "服务通知";
+        const tag = (data && data.slotLabel) ? data.slotLabel.replace(/^合宙\s*/, '') : "验证码";
+
+        if (codeEl) codeEl.textContent = code;
+        if (senderEl) senderEl.textContent = sender;
+        if (tagEl) tagEl.textContent = tag;
+
+        el.classList.add("expanded");
+        this.isExpanded = true;
+
+        if (this.timer) clearTimeout(this.timer);
+        this.startCollapseTimer(10);
+      },
+
+      startCollapseTimer(seconds) {
+        let remaining = seconds;
+        const tick = () => {
+          if (!this.isExpanded) return;
+          if (this.isPaused) {
+            this.timer = setTimeout(tick, 1000);
+            return;
+          }
+          remaining -= 1;
+          if (remaining <= 0) {
+            this.collapse();
+          } else {
+            this.timer = setTimeout(tick, 1000);
+          }
+        };
+        this.timer = setTimeout(tick, 1000);
+      },
+
+      collapse() {
+        const el = document.getElementById("dynamicIsland");
+        if (el) el.classList.remove("expanded");
+        this.isExpanded = false;
+        if (this.timer) {
+          clearTimeout(this.timer);
+          this.timer = null;
+        }
+      },
+
+      handleClick() {
+        if (this.isExpanded) return;
+        if (this.lastOtpData) {
+          this.expand(this.lastOtpData);
+        } else {
+          showToast("ℹ️ 灵动岛待命中，暂无未消费的新验证码", "info");
+        }
+      }
+    };
+
+    function copyDynamicIslandOtp() {
+      const codeEl = document.getElementById("islandActiveCode");
+      const code = codeEl ? codeEl.textContent.trim() : "";
+      if (code && code !== "------") {
+        copyTextWithFallback(code, `✓ 已存入剪贴板: ${code}`);
+        const el = document.getElementById("dynamicIsland");
+        if (el) {
+          el.style.boxShadow = "0 0 25px rgba(52, 211, 153, 0.6)";
+          setTimeout(() => {
+            if (el) el.style.boxShadow = "";
+            DynamicIslandController.collapse();
+          }, 600);
+        }
+      }
+    }
+
+    // =========================================================
     // 1. 全局状态机 (State Machine)
     // =========================================================
         const state = {
@@ -2735,6 +3441,8 @@
     }
 
     let draggedCard = null;
+    let dragStartOrder = [];
+    const slotMoveAnimations = new Map();
 
     function initCardDrag(cardId) {
       const card = document.getElementById(cardId);
@@ -2742,74 +3450,94 @@
       card.setAttribute("draggable", "true");
     }
 
+    function cancelSlotMoveAnimations() {
+      slotMoveAnimations.forEach(animation => animation.cancel());
+      slotMoveAnimations.clear();
+    }
+
+    function moveDraggedCard(container, beforeCard) {
+      if (!draggedCard || beforeCard === draggedCard || draggedCard.nextElementSibling === beforeCard) return;
+      const cards = Array.from(container.querySelectorAll(".slot-card"));
+      // 采样当前画面再取消旧动画，快速反向时从正在显示的位置接续。
+      const before = new Map(cards.map(card => [card, card.getBoundingClientRect().top]));
+      cancelSlotMoveAnimations();
+      container.insertBefore(draggedCard, beforeCard);
+      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+      cards.forEach(card => {
+        if (card === draggedCard || typeof card.animate !== "function") return;
+        const delta = before.get(card) - card.getBoundingClientRect().top;
+        if (Math.abs(delta) < 0.5) return;
+        const animation = card.animate(
+          [{ transform: "translateY(" + delta + "px)" }, { transform: "translateY(0)" }],
+          { duration: 180, easing: "ease-out" }
+        );
+        slotMoveAnimations.set(card, animation);
+        animation.onfinish = () => {
+          if (slotMoveAnimations.get(card) === animation) slotMoveAnimations.delete(card);
+        };
+      });
+    }
+
+    function updateDragPosition(container, clientY) {
+      // offsetTop 不受 FLIP transform 影响，避免动画中的视觉中线导致来回换位。
+      const localY = clientY - container.getBoundingClientRect().top - container.clientTop + container.scrollTop;
+      const beforeCard = Array.from(container.querySelectorAll(".slot-card"))
+        .find(card => card !== draggedCard && localY < card.offsetTop + card.offsetHeight / 2) || null;
+      moveDraggedCard(container, beforeCard);
+    }
+
+    function finishSlotDrag(container, committed) {
+      if (!draggedCard) return;
+      cancelSlotMoveAnimations();
+      if (!committed) dragStartOrder.forEach(card => container.appendChild(card));
+      container.querySelectorAll(".slot-card").forEach(card => {
+        card.classList.remove("dragging");
+        card.setAttribute("draggable", "false");
+      });
+      draggedCard = null;
+      dragStartOrder = [];
+      state._isDragging = false;
+      if (committed) saveSlotOrder();
+      // 按到达次序回放完整列表/状态增量，较旧列表不能盖掉较新的 SSE。
+      const pending = renderStatus.pendingUpdates || [];
+      renderStatus.pendingUpdates = null;
+      pending.forEach(update => {
+        if (update.type === "slots") renderSlots(update.data);
+        else renderStatus(update.data);
+      });
+      if (committed) showToast("↕️ 卡片顺序已调整并保存", "info");
+    }
+
     function setupDragAndDrop(container) {
       if (!container || container._dndBound) return;
       container._dndBound = true;
-
       container.addEventListener("dragstart", (e) => {
         const card = e.target.closest(".slot-card");
-        if (!card) return;
+        if (!card || card.getAttribute("draggable") !== "true") return;
+        cancelSlotMoveAnimations();
         draggedCard = card;
+        dragStartOrder = Array.from(container.querySelectorAll(".slot-card"));
         state._isDragging = true;
+        renderStatus.pendingUpdates = [];
         e.dataTransfer.effectAllowed = "move";
         e.dataTransfer.setData("text/plain", card.id);
-        setTimeout(() => card.classList.add("dragging"), 0);
+        setTimeout(() => {
+          if (draggedCard === card) card.classList.add("dragging");
+        }, 0);
       });
-
-      container.addEventListener("dragend", (e) => {
-        const card = e.target.closest(".slot-card");
-        if (card) {
-          card.classList.remove("dragging");
-          card.setAttribute("draggable", "false");
-        }
-        draggedCard = null;
-        document.querySelectorAll(".slot-card").forEach(c => {
-          c.classList.remove("drag-over-top", "drag-over-bottom");
-          c.setAttribute("draggable", "false");
-        });
-        setTimeout(() => { state._isDragging = false; }, 120);
-        saveSlotOrder();
-      });
-
       container.addEventListener("dragover", (e) => {
+        if (!draggedCard) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = "move";
-        const targetCard = e.target.closest(".slot-card");
-        if (!targetCard || targetCard === draggedCard) return;
-
-        const rect = targetCard.getBoundingClientRect();
-        const midY = rect.top + rect.height / 2;
-        if (e.clientY < midY) {
-          targetCard.classList.add("drag-over-top");
-          targetCard.classList.remove("drag-over-bottom");
-        } else {
-          targetCard.classList.add("drag-over-bottom");
-          targetCard.classList.remove("drag-over-top");
-        }
+        updateDragPosition(container, e.clientY);
       });
-
-      container.addEventListener("dragleave", (e) => {
-        const targetCard = e.target.closest(".slot-card");
-        if (targetCard) {
-          targetCard.classList.remove("drag-over-top", "drag-over-bottom");
-        }
-      });
-
       container.addEventListener("drop", (e) => {
+        if (!draggedCard) return;
         e.preventDefault();
-        const targetCard = e.target.closest(".slot-card");
-        if (!targetCard || !draggedCard || targetCard === draggedCard) return;
-
-        const rect = targetCard.getBoundingClientRect();
-        const midY = rect.top + rect.height / 2;
-        if (e.clientY < midY) {
-          container.insertBefore(draggedCard, targetCard);
-        } else {
-          container.insertBefore(draggedCard, targetCard.nextSibling);
-        }
-        targetCard.classList.remove("drag-over-top", "drag-over-bottom");
-        showToast("↕️ 卡片顺序已调整并保存", "info");
+        updateDragPosition(container, e.clientY);
+        finishSlotDrag(container, true);
       });
+      container.addEventListener("dragend", () => finishSlotDrag(container, false));
     }
 
     function saveSlotOrder() {
@@ -2822,7 +3550,7 @@
         if (slotId) order.push(slotId);
       });
       if (order.length > 0) {
-        localStorage.setItem("air780_slot_order", JSON.stringify(order));
+        try { localStorage.setItem("air780_slot_order", JSON.stringify(order)); } catch (err) {}
       }
     }
 
@@ -3012,7 +3740,7 @@
             <span class="data-label">电脑端口:</span><span class="data-val" id="slot${slotIdx}PortVal">自动探测中...</span>
             <span class="data-label">温度 / 电压:</span><span class="data-val" id="slot${slotIdx}TempVbatVal">采样中...</span>
             <span class="data-label">运行时间:</span><span class="data-val" id="slot${slotIdx}UptimeVal" style="color: #cbd5e1;">刚启动</span>
-            <span class="data-label">已存短信:</span><span class="data-val" id="slot${slotIdx}StorageVal" style="color: var(--accent-green);">0 / 100 条</span>
+            <span class="data-label" title="模组内部保存的短信数量；电脑收件箱另行保存">设备内短信:</span><span class="data-val" id="slot${slotIdx}StorageVal" style="color: var(--accent-green);">读取中...</span>
           </div>
 
           <div style="margin-top: 0.65rem; padding-top: 0.55rem; border-top: 1px dashed rgba(255,255,255,0.08); display: flex; align-items: center; justify-content: space-between;">
@@ -3060,6 +3788,22 @@
         slotDataMap[slotId] = {};
       }
       const slotCache = slotDataMap[slotId];
+
+      // 计数仅属于当前设备；身份明确变化或离线后不继承旧设备的值。
+      const countIdentityChanged = ["imei", "iccid"].some(key => {
+        const next = data[key] == null ? "" : String(data[key]).trim();
+        return next && slotCache[key] && next !== String(slotCache[key]).trim();
+      });
+      if (!isOnline || countIdentityChanged || data.iccid === "未插卡" || data.sim_ready === false) {
+        delete slotCache.smsCount;
+        delete slotCache.smsMax;
+      }
+      if (isOnline && Number.isInteger(data.sms_count) && data.sms_count >= 0) {
+        slotCache.smsCount = data.sms_count;
+      }
+      if (isOnline && Number.isInteger(data.sms_max) && data.sms_max > 0) {
+        slotCache.smsMax = data.sms_max;
+      }
 
       // 检查是否显式未插卡
       const isExplicitNoSim = (data.iccid === "未插卡" || data.sim_ready === false);
@@ -3364,12 +4108,13 @@
         safeUpdateText(uptimeEl, upText);
       }
 
-      // 已存短信
+      // 设备内短信：局部事件缺字段时保留同设备已知值，显式 0 正常显示。
       const storageEl = document.getElementById(`slot${slotIdx}StorageVal`);
       if (storageEl) {
-        let used = (data.sms_count !== undefined && data.sms_count !== null) ? data.sms_count : 0;
-        let total = data.sms_max || 100;
-        safeUpdateText(storageEl, isOnline ? `${used} / ${total} 条` : "--");
+        const used = slotCache.smsCount;
+        const total = slotCache.smsMax || 100;
+        const storageText = used === undefined ? "读取中..." : `${used} / ${total} 条`;
+        safeUpdateText(storageEl, isOnline ? storageText : "--");
       }
 
       // 在线 / 离线微调
@@ -3396,97 +4141,74 @@
     }
 
     function renderSlots(slotsList) {
-      if (!Array.isArray(slotsList) || slotsList.length === 0) {
-        const container = document.getElementById("slotCardsContainer");
-        if (container) {
-          const skeleton = document.getElementById("slotCardsSkeleton");
-          if (skeleton) skeleton.remove();
-          if (!document.getElementById("slotCardsEmpty")) {
-            const emptyEl = document.createElement("div");
-            emptyEl.id = "slotCardsEmpty";
-            emptyEl.style.cssText = "padding: 3rem 1rem; text-align: center; color: #64748b; font-size: 0.8rem; line-height: 1.6;";
-            emptyEl.innerHTML = "🔌 <b>未检测到已接入的 4G 模组</b><br><span style='font-size: 0.72rem;'>请将开发板插入 USB 端口后点击右上角【🔄 扫描】</span>";
-            container.appendChild(emptyEl);
-          }
-        }
+      if (!Array.isArray(slotsList)) return;
+      if (renderStatus.pendingUpdates) {
+        renderStatus.pendingUpdates.push({ type: "slots", data: slotsList.map(slot => ({ ...slot })) });
         return;
       }
-
+      EventBus.emit("slots:updated", slotsList);
       const container = document.getElementById("slotCardsContainer");
       if (!container) return;
-
       const skeleton = document.getElementById("slotCardsSkeleton");
       if (skeleton) skeleton.remove();
+      // DOM 身份与按钮始终绑定 slot；展示顺序只移动同一节点。
+      const incoming = slotsList.filter(slot => slot && slot.slot);
+      const slotIds = new Set(incoming.map(slot => slot.slot));
+      container.querySelectorAll(".slot-card").forEach(card => {
+        if (!slotIds.has(card.getAttribute("data-slot-id"))) card.remove();
+      });
       const emptyEl = document.getElementById("slotCardsEmpty");
-      if (emptyEl) emptyEl.remove();
-
-      // 按照用户自定义拖拽顺序重排卡槽
-      try {
-        const savedOrder = JSON.parse(localStorage.getItem("air780_slot_order") || "[]");
-        if (Array.isArray(savedOrder) && savedOrder.length > 0) {
-          slotsList.sort((a, b) => {
-            const aId = a.slot || "";
-            const bId = b.slot || "";
-            const aIdx = savedOrder.indexOf(aId);
-            const bIdx = savedOrder.indexOf(bId);
-            if (aIdx !== -1 && bIdx !== -1) return aIdx - bIdx;
-            if (aIdx !== -1) return -1;
-            if (bIdx !== -1) return 1;
-            return 0;
-          });
+      if (incoming.length === 0) {
+        if (!emptyEl) {
+          const empty = document.createElement("div");
+          empty.id = "slotCardsEmpty";
+          empty.style.cssText = "padding: 3rem 1rem; text-align: center; color: #64748b; font-size: 0.8rem; line-height: 1.6;";
+          empty.innerHTML = "🔌 <b>未检测到已接入的 4G 模组</b><br><span style='font-size: 0.72rem;'>请将开发板插入 USB 端口后点击右上角【🔄 扫描】</span>";
+          container.appendChild(empty);
         }
-      } catch (err) {}
-
-      const onlineCount = slotsList.filter(s => s.online !== false).length;
-      const headerCountBadge = document.getElementById("headerCountBadge");
-      if (headerCountBadge) {
-        let countText = "设备离线";
-        if (onlineCount > 1) {
-          countText = `${onlineCount} 模组就绪`;
-        } else if (onlineCount === 1) {
-          countText = "1 模组就绪";
-        }
-        safeUpdateText(headerCountBadge, countText);
+      } else if (emptyEl) {
+        emptyEl.remove();
       }
 
-      slotsList.forEach((slot, index) => {
-        const slotIdx = index + 1;
-        const slotId = slot.slot || `slot_${slotIdx}`;
-        let card = document.getElementById(`slotCard${slotIdx}`);
-
+      let order = Array.from(container.querySelectorAll(".slot-card"), card => card.getAttribute("data-slot-id"));
+      try {
+        const saved = JSON.parse(localStorage.getItem("air780_slot_order") || "[]");
+        if (Array.isArray(saved)) order = [...new Set([...saved, ...order])];
+      } catch (err) {}
+      const orderedSlots = [...incoming].sort((a, b) => {
+        const ai = order.indexOf(a.slot), bi = order.indexOf(b.slot);
+        return (ai < 0 ? Infinity : ai) - (bi < 0 ? Infinity : bi);
+      });
+      const onlineCount = incoming.filter(slot => slot.online !== false).length;
+      const headerCountBadge = document.getElementById("headerCountBadge");
+      if (headerCountBadge) {
+        safeUpdateText(headerCountBadge, onlineCount ? onlineCount + " 模组就绪" : "设备离线");
+      }
+      orderedSlots.forEach(slot => {
+        const slotId = slot.slot;
+        const slotIdx = slotId.replace(/^slot_/, "");
+        let card = document.getElementById("slotCard" + slotIdx);
         if (!card) {
           card = document.createElement("div");
           card.className = "slot-card";
-          card.id = `slotCard${slotIdx}`;
+          card.id = "slotCard" + slotIdx;
           card.setAttribute("data-slot-id", slotId);
           card.innerHTML = getSlotCardTemplate(slotIdx, slotId);
-          container.appendChild(card);
-        } else {
-          card.setAttribute("data-slot-id", slotId);
         }
-
-        if (!state._userInteractedCards) {
-          card.classList.remove("expanded");
-        }
-
+        container.appendChild(card);
         renderSingleSlot(slot, slotIdx);
       });
-
-      // 移除多余卡槽元素
-      const existingCards = container.querySelectorAll(".slot-card");
-      if (existingCards.length > slotsList.length) {
-        for (let i = slotsList.length; i < existingCards.length; i++) {
-          existingCards[i].remove();
-        }
-      }
-
       setupDragAndDrop(container);
     }
 
     function renderStatus(data) {
       if (!data) return;
+      if (renderStatus.pendingUpdates) {
+        renderStatus.pendingUpdates.push({ type: "status", data: { ...data } });
+        return;
+      }
       const targetSlot = data.slot || "slot_1";
-      const idx = targetSlot === "slot_2" ? 2 : (targetSlot === "slot_3" ? 3 : (targetSlot === "slot_4" ? 4 : 1));
+      const idx = targetSlot.replace(/^slot_/, "");
       renderSingleSlot(data, idx);
     }
 
@@ -3667,6 +4389,8 @@
         const timeStr = sms.time || sms.received_at || "刚刚";
         const otp = sms.otp || extractOtpClient(content);
         const displayTag = getSlotDisplayTag(sms.slot, sms);
+        const brandInfo = FeedFormatter.extractSender(content, sender);
+        const displayContent = FeedFormatter.highlightOtpInContent(content, otp);
 
         if (otp && !latestOtp) {
           latestOtp = otp;
@@ -3687,11 +4411,14 @@
           `;
         }
 
+        const senderTitle = brandInfo.isBranded ? `${brandInfo.title} (${sender})` : sender;
+        const senderDisplay = brandInfo.isBranded ? brandInfo.title : sender;
+
         card.innerHTML = `
           <div class="sms-header">
             <div class="sms-header-left">
               <span class="sms-slot-pill">${slotLabel}</span>
-              <span class="sms-sender">${sender}</span>
+              <span class="sms-sender" title="${senderTitle}">${senderDisplay}</span>
               <span class="sms-service-pill">服务通知</span>
             </div>
             <div class="sms-header-right">
@@ -3700,7 +4427,7 @@
               <button class="btn-delete-sms" onclick="deleteSingleSms(this, '${sms.id || ''}', '${timeStr}', '${sender}', '${encodeURIComponent(content)}', '${sms.iccid || ''}', '${sms.slot || ''}')" title="清除此条记录（不影响模组硬件存储）">🧹</button>
             </div>
           </div>
-          <div class="sms-body">${content}</div>
+          <div class="sms-body">${displayContent}</div>
         `;
         container.appendChild(card);
       });
@@ -3763,11 +4490,20 @@
       const slotHint = document.getElementById("topOtpSlotHint");
       if (!capsule || !otpVal) return;
 
+      const wasNew = (otp && otp !== state.latestOtp);
       state.latestOtp = otp;
       if (otp) {
         capsule.style.display = "flex";
         otpVal.textContent = otp;
         if (slotHint) slotHint.textContent = slotText;
+
+        if (wasNew) {
+          EventBus.emit("otp:received", {
+            code: otp,
+            slotLabel: slotText.replace(" · 点击复制", "").replace("来自 ", ""),
+            timestamp: Date.now()
+          });
+        }
       } else {
         capsule.style.display = "none";
       }
@@ -4278,7 +5014,7 @@
 
     async function toggleRndis(slotId, enabled) {
       const info = getSafeSlotInfo(slotId);
-      const slotIdx = slotId === 'slot_2' ? 2 : (slotId === 'slot_3' ? 3 : (slotId === 'slot_4' ? 4 : 1));
+      const slotIdx = slotId.replace(/^slot_/, "");
       const switchEl = document.getElementById(`switchRndis${slotIdx}`);
       if (!state.deviceOnline) {
         if (switchEl) switchEl.checked = !enabled;
@@ -4297,7 +5033,7 @@
 
     async function toggleData(slotId, enabled) {
       const info = getSafeSlotInfo(slotId);
-      const slotIdx = slotId === 'slot_2' ? 2 : (slotId === 'slot_3' ? 3 : (slotId === 'slot_4' ? 4 : 1));
+      const slotIdx = slotId.replace(/^slot_/, "");
       const switchEl = document.getElementById(`switchData${slotIdx}`);
       if (!state.deviceOnline) {
         if (switchEl) switchEl.checked = !enabled;
@@ -5009,8 +5745,10 @@
     // =========================================================
     // 17. 页面启动初始化
     // =========================================================
-        window.addEventListener("DOMContentLoaded", async () => {
+    window.addEventListener("DOMContentLoaded", async () => {
       try {
+        ThemeManager.init();
+        DynamicIslandController.init();
         setupDragAndDrop(document.getElementById("slotCardsContainer"));
         await pollDeviceHeartbeat();
         fetchSmsHistory();
@@ -5020,6 +5758,8 @@
         return;
       } catch (err) {}
 
+      ThemeManager.init();
+      DynamicIslandController.init();
       setDeviceOnlineState(false, "等待通信网关设备就绪...");
       fetchSmsHistory();
       fetchCallsHistory();

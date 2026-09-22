@@ -981,6 +981,38 @@ EC618/EC718 运行 LuatOS 剩余可用堆内存仅 30~60KB，板端物理 Little
 2. **AI 专属接入提示词**：抽屉内置面向外部 AI（Claude/Cursor/Pi）的标准提示词框与 `[📋 复制提示词]` 按钮，支持点击框体即时复制，并附带 Toast 反馈；
 3. **Apple-style 12px 高斯毛玻璃遮罩**：打开抽屉时左侧工作区呈现深邃磨砂柔焦虚化，点击左侧大面积毛玻璃背景或按下 `ESC` 键，抽屉平滑自然滑回收起。
 
+---
+
+## 28. 前端 UI 通用能力抽离与 iPhone 灵动岛多风格一键切换架构规范 (AIR-37 UI Design System & Dynamic Island Architecture)
+
+AIR-40 按用户决定固定经典界面，移除主题切换并忽略旧 island 偏好；验证码通用能力保留。28.2及28.4中的灵动岛专属内容是保留实现的历史说明，当前不启用。设备卡片稳定滚动槽、拖动让位与按 slot 绑定的当前规范以 `ui-design-system.md` 第4节为准，接受范围见 `../changes/0040-优化-设备卡片布局与排序交互/tasks.md`。
+
+### 28.1 独立设计规范先行与双主题严格 CSS 隔离 (Zero-Pollution Dual-Theme Architecture)
+1. **顶层设计系统先行落盘**：以 `specs/ui-design-system.md` 为唯一设计规范事实源（SSOT），明确 Design Tokens 调色板、字号阶梯、弹性动效曲线与大白话人机词表；
+2. **经典基准 100% 绝对保护 (Zero-Pollution Guarantee)**：原经典工整极客控制台（`classic`）作为出厂默认基线完整保留，所有灵动岛与微拟物样式严格限定在 `html[data-theme="island"]` 作用域下，经典模式下 `html:not([data-theme="island"]) .dynamic-island-container` 强制 `display: none !important`，杜绝任何样式污染与功能退化；
+3. **固定经典界面**：`ThemeManager.init()` 固定 `data-theme=classic` 并迁移 `cellular_gateway_theme` 旧偏好；顶栏和设置切换入口已移除，通用事件总线与验证码展示复制保持。
+
+### 28.2 iPhone 灵动通信岛组件架构与交互保护机制 (Dynamic Island & Hover Watchdog)
+1. **轻量事件总线解耦 (EventBus)**：抽离全局 `EventBus`，底层物理网络与串口通信通过 `EventBus.emit("otp:received")` / `EventBus.emit("slots:updated")` 广播，灵动岛控制器独立订阅消费，彻底解耦底层驱动与呈现层；
+2. **待机态动态卡槽与信号感知**：灵动岛待机态为高度 38px 的居中悬浮黑洞胶囊，指示灯严格根据后端实时 `slots` 数组动态响应渲染（单卡单指示灯，多卡多指示灯），单卡与多卡集群工程通用；
+3. **流体果冻水滴展开态**：新验证码到达时以 `cubic-bezier(0.175, 0.885, 0.32, 1.275)` 弹性展开为 76px 空间悬浮卡片，呈现金黄钥匙圆形徽标、机构/卡槽来源标签、大字号等宽高亮验证码数字与 `[📋 复制]` 胶囊；
+4. **悬停保护看门狗 (Hover Pause Watchdog)**：展开态内置 10 秒自动回缩定时器；当鼠标悬停（Hover）或触控时，看门狗自动冻结倒计时，移出后恢复，彻底避免用户移动光标点击时组件意外缩回。
+
+### 28.3 消息排版大白话提炼与验证码全域点击直达 (FeedFormatter & In-Text OTP Highlighting)
+1. **机构前缀大白话提炼**：抽离 `FeedFormatter.extractSender()`，智能提取正文开头 `【深度求索】`、`【中国联通】` 等机构签名，直接提升为主标题呈现，消除生硬 16 位长号对视线的干扰；
+2. **正文验证码数字高亮与秒级直写**：抽离 `FeedFormatter.highlightOtpInContent()`，正文内的验证码数字自动包裹 `.otp-text-highlight` 专属晶体高光衬底，点击正文验证码即可秒级直写 Windows 剪贴板并弹出 Toast 反馈；
+3. **剪贴板工具通用化与降级兜底**：实现 `copyTextWithFallback()`，在现代 `navigator.clipboard` 基础之上封装 `textarea + execCommand('copy')` 工业级降级兜底，确保在不同浏览器与 iframe 容器下 100% 复制成功。
+
+### 28.4 Apple 空间微拟物倒角、iOS 翠绿开关与 6px 极窄滚动条
+1. **Apple 空间 1px 晶体微拟物倒角**：在灵动岛模式下为设备卡片与弹窗注入 `0 1px 0 rgba(255,255,255,0.14) inset` 高光折射倒角，配合深邃暗黑磨砂玻璃与细腻微光阴影；
+2. **iOS 原生翠绿滑动开关**：在灵动岛模式下 4G 蜂窝数据与上网开关覆盖为 iOS 经典翠绿色（`#10b981`），平滑圆润，视觉质感显著跃升；
+3. **6px 极窄暗黑半透明定制滚动条**：全局覆写 `::-webkit-scrollbar`（宽度 6px，滑块 `rgba(255, 255, 255, 0.14)`，悬停 `0.32`），配合 Firefox `scrollbar-width: thin`，彻底告别 Windows 原生粗笨白底滑块。
+
+### 28.5 全端自适应防穿模与双工程镜像统一
+1. **弹性宽度约束防溢出**：灵动岛主体采用 `max-width: min(440px, calc(100vw - 24px))`，配合 `@media (max-width: 768px)` 移动端顶栏动态顶补白（`padding-top: 50px`），确保在 360×812 极窄手机屏上 0 像素横向溢出穿模；
+2. **双工程严格镜像一致**：`tools/cluster_gateway/web/index.html` 与 `tools/host_gateway/web/index.html` 保持 100% 字节级严格镜像同步。
+
+
 
 
 

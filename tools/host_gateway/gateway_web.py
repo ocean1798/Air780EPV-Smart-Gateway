@@ -425,6 +425,16 @@ class HubBackendClient:
             if target_slot not in self.latest_status_by_slot:
                 self.latest_status_by_slot[target_slot] = {}
             target_cache = self.latest_status_by_slot[target_slot]
+            slot_info = next((s for s in self.slots if s.get("slot") == target_slot), {})
+            # 计数只属于当前设备/SIM。缺少身份字段不代表换卡。
+            identity_changed = any(
+                event_data.get(key) and (target_cache.get(key) or slot_info.get(key))
+                and event_data[key] != (target_cache.get(key) or slot_info.get(key))
+                for key in ("imei", "iccid")
+            )
+            offline = event_data.get("online") is False
+            if identity_changed or offline:
+                target_cache.pop("sms_count", None)
 
             if "rndis" in event_data:
                 target_cache["rndis"] = bool(event_data["rndis"])
@@ -440,13 +450,17 @@ class HubBackendClient:
                 target_cache["cellular_data"] = bool(event_data["cellular_data_enable"])
                 target_cache["cellular_data_enable"] = bool(event_data["cellular_data_enable"])
 
-            for k in ("model", "bsp", "imei", "iccid", "csq", "rsrp", "temp", "vbat", "sms_count", "uptime", "lua_mem_kb", "version", "capabilities", "port"):
-                if k in event_data:
+            for k in ("model", "bsp", "imei", "iccid", "csq", "rsrp", "temp", "vbat", "uptime", "lua_mem_kb", "version", "capabilities", "port", "online"):
+                if k in event_data and (k not in ("imei", "iccid") or event_data[k]):
                     target_cache[k] = event_data[k]
+            # 增量缺字段保留同设备最近值；显式 0 是有效设备值。
+            if not offline:
+                if "blackbox_count" in event_data:
+                    target_cache["sms_count"] = event_data["blackbox_count"]
+                elif "sms_count" in event_data:
+                    target_cache["sms_count"] = event_data["sms_count"]
             if "current_version" in event_data:
                 target_cache["version"] = event_data["current_version"]
-            if "blackbox_count" in event_data:
-                target_cache["sms_count"] = event_data["blackbox_count"]
             if "uptime_seconds" in event_data:
                 target_cache["uptime"] = event_data["uptime_seconds"]
 
@@ -469,7 +483,16 @@ class HubBackendClient:
 
             # 如果当前活跃卡槽与 target_slot 一致，同步更新缺省缓存
             if target_slot == self.active_slot:
+                self.latest_status.pop("sms_count", None)
                 self.latest_status.update(target_cache)
+
+    def _update_slots_cache(self, slots_data: list):
+        """Hub 卡槽摘要中的设备数也同步到后续 SSE 使用的状态缓存。"""
+        for slot_info in slots_data:
+            if slot_info.get("slot"):
+                self._update_status_cache(slot_info, slot=slot_info["slot"])
+        with self.cache_lock:
+            self.slots = slots_data
 
     def _dispatch_frame(self, raw_line: str):
         try:
@@ -515,8 +538,8 @@ class HubBackendClient:
             # 处理 get_slots 响应
             if req_id == "init_slots" and data.get("ok"):
                 slots_data = data.get("data", {}).get("slots", [])
+                self._update_slots_cache(slots_data)
                 with self.cache_lock:
-                    self.slots = slots_data
                     if self.slots and not any(s["slot"] == self.active_slot for s in self.slots):
                         self.active_slot = self.slots[0]["slot"]
                 self.broadcast_sse("cluster_update", {"slots": self.slots, "active_slot": self.active_slot})
@@ -533,7 +556,7 @@ class HubBackendClient:
             if event_name in ("cluster_status", "dongle_connected", "dongle_disconnected"):
                 # 会话池集群状态变动
                 if event_name == "cluster_status":
-                    self.slots = event_data.get("slots", [])
+                    self._update_slots_cache(event_data.get("slots", []))
                     # 尝试触发所有在线卡槽的脱机同步
                     for s in self.slots:
                         if s.get("online") and s.get("iccid"):
@@ -541,6 +564,7 @@ class HubBackendClient:
                 elif event_name == "dongle_connected":
                     # 增量添加或更新
                     slot_id = event_data.get("slot")
+                    self._update_status_cache(event_data, slot=slot_id)
                     existing = [s for s in self.slots if s.get("slot") == slot_id]
                     if existing:
                         existing[0].update(event_data)
@@ -550,6 +574,7 @@ class HubBackendClient:
                         self._trigger_offline_sync(slot_id, event_data.get("iccid"))
                 elif event_name == "dongle_disconnected":
                     slot_id = event_data.get("slot")
+                    self._update_status_cache({"online": False}, slot=slot_id)
                     for s in self.slots:
                         if s.get("slot") == slot_id:
                             s["online"] = False
@@ -565,12 +590,14 @@ class HubBackendClient:
                 self.broadcast_sse("cluster_update", {"slots": self.slots, "active_slot": self.active_slot})
 
             elif event_name in ("device_connected", "dongle_connected"):
+                self._update_status_cache(event_data, slot=evt_slot)
                 self.is_hardware_connected = True
                 if event_data.get("iccid"):
                     self._trigger_offline_sync(evt_slot, event_data.get("iccid"))
                 self.broadcast_sse("device_connected", {"online": True, "slot": evt_slot})
 
             elif event_name in ("device_disconnected", "dongle_disconnected"):
+                self._update_status_cache({"online": False}, slot=evt_slot)
                 with self.cache_lock:
                     self.synced_slots.discard(evt_slot)
                 self.broadcast_sse("device_disconnected", {"online": False, "slot": evt_slot})
@@ -726,8 +753,18 @@ class HubBackendClient:
             manifest = luadb_packer.get_version_manifest()
             target_ver = manifest.get("version", "1.2.7")
 
+            # 自动探测芯片架构 (支持 EC718PV 与 EC618 平台)
+            curr_slot_info = {}
+            with self.cache_lock:
+                for s in self.slots:
+                    if s.get("slot") == slot:
+                        curr_slot_info = s
+                        break
+            mod = (curr_slot_info.get("model") or curr_slot_info.get("bsp") or "").upper()
+            chip_type = "ec618" if ("780E" in mod and "EPV" not in mod) or "618" in mod or "700E" in mod else "ec718"
+
             raw_luadb = luadb_packer.pack_luadb(target_version=target_ver)
-            sota_bytes, meta = luadb_packer.pack_sota_package(raw_luadb, target_version=target_ver)
+            sota_bytes, meta = luadb_packer.pack_sota_package(raw_luadb, target_version=target_ver, chip_type=chip_type)
 
             total_len = len(sota_bytes)
             chunk_size = 2048
@@ -922,8 +959,7 @@ class GatewayWebHandler(BaseHTTPRequestHandler):
             resp = self.backend.execute_cmd("get_slots", timeout=2.0)
             if resp.get("ok"):
                 slots_data = resp.get("data", {}).get("slots", [])
-                with self.backend.cache_lock:
-                    self.backend.slots = slots_data
+                self.backend._update_slots_cache(slots_data)
             with self.backend.cache_lock:
                 slots_list = list(self.backend.slots)
                 act_slot = self.backend.active_slot
@@ -997,11 +1033,6 @@ class GatewayWebHandler(BaseHTTPRequestHandler):
                             if s.get("slot") == target_slot and s.get("iccid"):
                                 iccid_val = s["iccid"]
                                 break
-                if iccid_val:
-                    comp = self.backend.storage_mgr.get_compartment(iccid_val)
-                    auth_cnt = len(comp.load_messages()) if comp else 0
-                    sms_count_val = max(int(sms_count_val or 0), auth_cnt)
-
                 norm_status = {
                     "online": True,
                     "slot": target_slot,
@@ -1027,6 +1058,7 @@ class GatewayWebHandler(BaseHTTPRequestHandler):
                 self._send_json_resp(200, {"ok": True, "online": True, "slot": target_slot, "data": norm_status})
             else:
                 err_msg = resp.get("error") or resp.get("msg") or "模组未响应，物理设备已拔出"
+                self.backend._update_status_cache({"online": False}, slot=target_slot)
                 with self.backend.cache_lock:
                     cached = dict(self.backend.latest_status_by_slot.get(target_slot, {}))
                 cached["online"] = False
@@ -1419,19 +1451,11 @@ class GatewayWebHandler(BaseHTTPRequestHandler):
             bsp = curr_slot_info.get("bsp") or model
             cur_tuple = parse_semver(current_ver)
 
+            # 校验版本是否支持串口热更
             if cur_tuple < (1, 2, 6):
                 self._send_json_resp(400, {
                     "ok": False,
                     "error": f"模组固件版本 (v{current_ver or '未知'}) 较早，尚未内置串口极速热更协议桩，请使用【重新刷机控制台】升级底座固件",
-                    "slot": action_slot
-                })
-                return
-
-            is_epv = "EPV" in model.upper() or "EC718" in bsp.upper() or "EPV" in bsp.upper()
-            if not is_epv and "780E" in model.upper():
-                self._send_json_resp(400, {
-                    "ok": False,
-                    "error": f"模组架构为 {model} (EC618 平台)，与当前 EPV 升级镜像不兼容，请使用【重新刷机控制台】刷入对应专属固件",
                     "slot": action_slot
                 })
                 return

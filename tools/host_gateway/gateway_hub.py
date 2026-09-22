@@ -16,6 +16,7 @@ import re
 import time
 import uuid
 import json
+import copy
 import socket
 import select
 import serial
@@ -466,6 +467,8 @@ class DongleSession:
         self.serial_lock = threading.Lock()
         self.is_connected = False
         self.is_flashing = False
+        self.maintenance_job: Optional[Dict[str, Any]] = None
+        self._serial_io_paused: bool = False
         self.running = False
         self.rx_thread: Optional[threading.Thread] = None
         self.rx_buffer = bytearray()
@@ -488,7 +491,15 @@ class DongleSession:
             "temp": "",
             "vbat": "",
             "net_ready": False,
-            "online": False
+            "online": False,
+            "reported_model": "",
+            "reported_chip": "",
+            "reported_imei": "",
+            "core_version": "",
+            "boot_id": None,
+            "build_id": None,
+            "serial_ota": None,
+            "_identity_seen_at": 0.0
         }
         self.latest_status: Dict[str, Any] = {}
         self.board_cellular_data: bool = False
@@ -526,6 +537,50 @@ class DongleSession:
         clean_line = line.strip()
         if not clean_line:
             return False
+
+        # 维护期间统一门卫拦截 (AIR-38 S04B)
+        is_maintenance = bool(getattr(self, "is_flashing", False) or getattr(self, "maintenance_job", None))
+        if is_maintenance:
+            try:
+                cmd_obj = json.loads(clean_line)
+            except Exception:
+                log(f"[{self.slot_id}] 维护期间拦截非 JSON 指令")
+                return False
+
+            if not isinstance(cmd_obj, dict):
+                return False
+
+            cmd_name = str(cmd_obj.get("cmd") or "").strip()
+            allowed_cmds = {
+                "ota_start", "ota_chunk", "ota_finish", "ota_abort",
+                "get_fota_status", "get_status"
+            }
+            if cmd_name not in allowed_cmds:
+                log(f"[{self.slot_id}] 维护期间拦截未授权指令: {cmd_name}")
+                return False
+
+            msg_job_id = cmd_obj.get("job_id")
+            if not msg_job_id and isinstance(cmd_obj.get("data"), dict):
+                msg_job_id = cmd_obj["data"].get("job_id")
+            if not msg_job_id and isinstance(cmd_obj.get("params"), dict):
+                msg_job_id = cmd_obj["params"].get("job_id")
+
+            active_job = getattr(self, "maintenance_job", None) or {}
+            active_job_id = active_job.get("job_id")
+            if not active_job_id or not msg_job_id or str(msg_job_id).strip() != str(active_job_id).strip():
+                log(f"[{self.slot_id}] 维护期间拦截 job_id 不匹配指令: cmd={cmd_name}, msg_job_id={msg_job_id}, active_job_id={active_job_id}")
+                return False
+
+            mode = active_job.get("mode")
+            phase = active_job.get("phase")
+            if mode == "script":
+                if phase != "confirming" or cmd_name != "get_status":
+                    log(f"[{self.slot_id}] script 维护期间非 confirming 或非 get_status 指令被拦截: cmd={cmd_name}, phase={phase}")
+                    return False
+            elif mode != "sota":
+                log(f"[{self.slot_id}] 未知维护模式被拦截: mode={mode}")
+                return False
+
         with self.serial_lock:
             if not self.ser or not self.ser.is_open:
                 return False
@@ -554,6 +609,8 @@ class DongleSession:
 
     def _probe_companion_fingerprint_once(self, force: bool = False):
         """若固件响应未包含 imei/iccid，通过伴生端口安全探测真机指纹 (IMEI 与当前 SIM 的 ICCID)"""
+        if getattr(self, "is_flashing", False) or getattr(self, "maintenance_job", None) is not None:
+            return
         if not force and self.meta.get("imei") and self.meta.get("iccid"):
             return
         now = time.time()
@@ -574,34 +631,40 @@ class DongleSession:
         except Exception as e:
             log(f"[{self.slot_id}] 伴生端口探测异常: {e}")
 
-    def pause_for_flash(self):
-        """挂起物理串口以供上位机 FlashToolCLI 独占烧录"""
+    def pause_for_flash(self, job: Optional[Dict[str, Any]] = None):
+        """挂起物理串口以供烧录或固件更新占用 (不再发送 AT/复位)"""
+        if job is not None:
+            self.maintenance_job = copy.deepcopy(job)
+        elif hasattr(self.hub, "bind_update_session"):
+            self.hub.bind_update_session(self)
         self.is_flashing = True
-        with self.serial_lock:
-            if self.ser and self.ser.is_open:
-                try:
-                    self.ser.write(b"AT+ECRST=delay,799\r\n")
-                    self.ser.flush()
-                    time.sleep(0.05)
-                    self.ser.write(b"~\x00\x02~")
-                    self.ser.flush()
-                    time.sleep(0.1)
-                    self.ser.close()
-                except Exception:
-                    pass
-            self.ser = None
-            self.is_connected = False
-            self.meta["online"] = False
-        log(f"[{self.slot_id}] 物理串口已安全释放，等待进入 Bootloader 模式")
+        mode = (self.maintenance_job or {}).get("mode", "script")
+        if mode == "script":
+            self._serial_io_paused = True
+            with self.serial_lock:
+                if self.ser and self.ser.is_open:
+                    try:
+                        self.ser.close()
+                    except Exception:
+                        pass
+                self.ser = None
+                self.is_connected = False
+                self.meta["online"] = False
+        else:
+            self._serial_io_paused = False
+        log(f"[{self.slot_id}] pause_for_flash (mode={mode})")
 
     def resume_after_flash(self):
-        """烧录完成后恢复串口轮询与守护重连"""
-        self.is_flashing = False
+        """烧录完成后由 Hub 重新计算绑定，不自主释放"""
+        if hasattr(self.hub, "bind_update_session"):
+            self.hub.bind_update_session(self)
         self._ensure_serial_opened()
-        log(f"[{self.slot_id}] 硬件烧录任务结束，已恢复物理串口守护")
+        log(f"[{self.slot_id}] resume_after_flash 已重算绑定")
 
     def _ensure_serial_opened(self) -> bool:
-        if getattr(self, "is_flashing", False):
+        if hasattr(self.hub, "bind_update_session"):
+            self.hub.bind_update_session(self)
+        if getattr(self, "_serial_io_paused", False):
             return False
         with self.serial_lock:
             if self.ser and self.ser.is_open:
@@ -651,31 +714,45 @@ class DongleSession:
 
             if not has_probed:
                 has_probed = True
-                self.is_flashing = False
                 time.sleep(0.2)
-                self.send_line(json.dumps({"type": "cmd", "id": f"init_{self.slot_id}", "cmd": "get_status"}))
+                init_pkt: Dict[str, Any] = {"type": "cmd", "id": f"init_{self.slot_id}", "cmd": "get_status"}
+                if self.maintenance_job and self.maintenance_job.get("job_id"):
+                    j_id = self.maintenance_job["job_id"]
+                    init_pkt["job_id"] = j_id
+                    init_pkt["data"] = {"job_id": j_id}
+                self.send_line(json.dumps(init_pkt))
                 time.sleep(1.0)
                 continue
 
             try:
-                # 状态自愈探针：若尚未识别出型号或每隔 4 秒，主动下发 get_status 保持指标鲜活
+                # 状态探针与自愈：维护与普通模式分流
                 now = time.time()
                 if self.ser and self.ser.is_open:
                     is_tx_busy = (now < getattr(self, "_sms_tx_busy_until", 0.0))
-                    need_poll = not getattr(self, "is_flashing", False) and not is_tx_busy and (
-                        (self.meta.get("bsp") in ("Unknown", "", None)) or 
-                        (now - getattr(self, "_last_status_poll", 0.0) >= 4.0)
-                    )
-                    if need_poll and (now - getattr(self, "_last_poll_send", 0.0) >= 1.5):
-                        self._last_poll_send = now
-                        self._last_status_poll = now
-                        try:
-                            probe_pkt = json.dumps({"type": "cmd", "id": f"poll_{self.slot_id}", "cmd": "get_status"}) + "\r\n"
-                            with self.serial_lock:
-                                self.ser.write(probe_pkt.encode("utf-8"))
-                                self.ser.flush()
-                        except Exception:
-                            pass
+                    if not is_tx_busy:
+                        if self.maintenance_job:
+                            if self.maintenance_job.get("phase") == "confirming":
+                                if now - getattr(self, "_last_status_poll", 0.0) >= 4.0:
+                                    self._last_status_poll = now
+                                    j_id = self.maintenance_job.get("job_id")
+                                    poll_pkt = {
+                                        "type": "cmd",
+                                        "id": f"poll_{self.slot_id}",
+                                        "cmd": "get_status",
+                                        "job_id": j_id,
+                                        "data": {"job_id": j_id}
+                                    }
+                                    self.send_line(json.dumps(poll_pkt))
+                        else:
+                            need_poll = not getattr(self, "is_flashing", False) and (
+                                (self.meta.get("bsp") in ("Unknown", "", None)) or 
+                                (now - getattr(self, "_last_status_poll", 0.0) >= 4.0)
+                            )
+                            if need_poll and (now - getattr(self, "_last_poll_send", 0.0) >= 1.5):
+                                self._last_poll_send = now
+                                self._last_status_poll = now
+                                poll_pkt = {"type": "cmd", "id": f"poll_{self.slot_id}", "cmd": "get_status"}
+                                self.send_line(json.dumps(poll_pkt))
 
                 line_bytes = b""
                 if self.ser and self.ser.is_open:
@@ -774,6 +851,50 @@ class DongleSession:
             elif "rndis_enable" in data: self.meta["rndis"] = bool(data["rndis_enable"])
             if "capabilities" in data and isinstance(data["capabilities"], dict):
                 self.meta["capabilities"] = data["capabilities"]
+            if "boot_id" in data:
+                self.meta["boot_id"] = data["boot_id"]
+            elif "boot_id" in obj:
+                self.meta["boot_id"] = obj["boot_id"]
+            if "build_id" in data:
+                self.meta["build_id"] = data["build_id"]
+            elif "build_id" in obj:
+                self.meta["build_id"] = obj["build_id"]
+            if "serial_ota" in data and isinstance(data["serial_ota"], dict):
+                self.meta["serial_ota"] = data["serial_ota"]
+            elif "serial_ota" in obj and isinstance(obj["serial_ota"], dict):
+                self.meta["serial_ota"] = obj["serial_ota"]
+
+            # 严格设备身份更新门卫：只有 data 同时有非空且非 unknown 的 imei/model/chip/core_version 原生字符串时更新
+            v_imei = data.get("imei")
+            v_model = data.get("model")
+            v_chip = data.get("chip")
+            v_core = data.get("core_version")
+
+            def _is_valid_identity_str(val: Any) -> bool:
+                return isinstance(val, str) and bool(val.strip()) and val.strip().lower() != "unknown"
+
+            has_valid_id = (
+                _is_valid_identity_str(v_imei) and
+                _is_valid_identity_str(v_model) and
+                _is_valid_identity_str(v_chip) and
+                _is_valid_identity_str(v_core)
+            )
+
+            if has_valid_id:
+                self.meta["reported_imei"] = v_imei.strip()
+                self.meta["reported_model"] = v_model.strip()
+                self.meta["reported_chip"] = v_chip.strip()
+                self.meta["core_version"] = v_core.strip()
+                self.meta["_identity_seen_at"] = time.time()
+                if hasattr(self.hub, "bind_update_session"):
+                    self.hub.bind_update_session(self)
+            elif any(k in data for k in ("imei", "model", "chip", "core_version")):
+                self.meta["reported_imei"] = ""
+                self.meta["reported_model"] = ""
+                self.meta["reported_chip"] = ""
+                self.meta["core_version"] = ""
+                self.meta["_identity_seen_at"] = 0.0
+
             self.meta["online"] = True
 
             # 若固件响应未包含 imei/iccid，触发伴生口探测补充
@@ -824,12 +945,30 @@ class DongleSession:
 
     def get_summary(self) -> Dict[str, Any]:
         """获取当前会话的对外简要看板信息"""
+        active_job_info = None
+        if self.maintenance_job:
+            active_job_info = {
+                "job_id": self.maintenance_job.get("job_id"),
+                "device_id": self.maintenance_job.get("device_id"),
+                "mode": self.maintenance_job.get("mode"),
+                "phase": self.maintenance_job.get("phase"),
+                "package_id": self.maintenance_job.get("package_id"),
+                "started_at": self.maintenance_job.get("started_at"),
+                "updated_at": self.maintenance_job.get("updated_at"),
+                "result": self.maintenance_job.get("result"),
+                "error": self.maintenance_job.get("error"),
+            }
         return {
             "slot": self.slot_id,
             "port": self.port,
             "loc": self.loc,
             "model": self.meta.get("model", "Air780"),
             "bsp": self.meta.get("bsp", ""),
+            "chip": self.meta.get("reported_chip") or self.meta.get("chip", ""),
+            "core_version": self.meta.get("core_version", ""),
+            "boot_id": self.meta.get("boot_id"),
+            "build_id": self.meta.get("build_id"),
+            "serial_ota": self.meta.get("serial_ota"),
             "imei": self.meta.get("imei", ""),
             "iccid": self.meta.get("iccid", ""),
             "phone": self.meta.get("phone", ""),
@@ -844,7 +983,8 @@ class DongleSession:
             "sms_count": self.meta.get("sms_count", 0),
             "rndis": bool(self.meta.get("rndis", False)),
             "cellular_data": self.board_cellular_data,
-            "capabilities": self.meta.get("capabilities", {})
+            "capabilities": self.meta.get("capabilities", {}),
+            "active_job": active_job_info
         }
 
 
@@ -936,6 +1076,8 @@ class DongleSessionPool:
                     if cached_imei and not session.meta.get("imei"):
                         session.meta["imei"] = cached_imei
                     self.sessions[p] = session
+                    if hasattr(self.hub, "bind_update_session"):
+                        self.hub.bind_update_session(session)
                     session.start()
                     log(f"⚡ [CLUSTER] 发现新卡板上线: {p} (位置: {loc}) -> 分配卡槽: 【{slot_id}】")
                     # 广播模组连接事件
@@ -945,6 +1087,10 @@ class DongleSessionPool:
                         "slot": slot_id,
                         "data": session.get_summary()
                     })
+                else:
+                    existing_sess = self.sessions.get(p)
+                    if existing_sess and hasattr(self.hub, "bind_update_session"):
+                        self.hub.bind_update_session(existing_sess)
 
             # 检测拔出断开端口
             for p in list(current_ports):
@@ -967,6 +1113,25 @@ class DongleSessionPool:
             except Exception as e:
                 log(f"未分配模组探测异常: {e}")
 
+    def _is_port_in_maintenance(self, p: Any) -> bool:
+        """纯枚举当前端口 USB 身份检查 store.active，占用或故障均跳过"""
+        loc = (getattr(p, "location", "") or "").strip()
+        ser = (getattr(p, "serial_number", "") or "").strip()
+        port_id: Dict[str, Any] = {"port": getattr(p, "device", "") or ""}
+        if loc:
+            port_id["usb_location"] = loc
+        if ser:
+            port_id["usb_serial"] = ser
+        if hasattr(self.hub, "update_jobs"):
+            try:
+                active_job = self.hub.update_jobs.active(port_id)
+                if active_job is not None:
+                    return True
+            except Exception as e:
+                log(f"[sniff] update_jobs 异常或故障，判定为占用避让 {getattr(p, 'device', '')}: {e}")
+                return True
+        return False
+
     def _sniff_unassigned_dongles(self, bound_ports: set):
         """
         AIR-35: 扫描系统上未绑定到 DongleSession 的移芯/合宙 4G 模组端口
@@ -977,6 +1142,8 @@ class DongleSessionPool:
         
         # 1. 寻找未绑定的 Bootloader (17D1:0001)
         for p in all_coms:
+            if self._is_port_in_maintenance(p):
+                continue
             hwid = (p.hwid or "").upper()
             vid = p.vid
             pid = p.pid
@@ -1000,6 +1167,8 @@ class DongleSessionPool:
         for p in all_coms:
             dev = p.device
             if dev in bound_ports:
+                continue
+            if self._is_port_in_maintenance(p):
                 continue
             hwid = (p.hwid or "").upper()
             vid = hex(p.vid or 0).upper()
@@ -1107,6 +1276,423 @@ class DongleSessionPool:
 
 
 # =========================================================================
+# 维护任务存储：UpdateJobStore (AIR-38 S04A)
+# =========================================================================
+
+class UpdateJobStore:
+    """Hub 维护任务存储与原子状态机 (AIR-38 S04A)"""
+    VALID_PHASES = {
+        "preflight", "receiving", "verifying", "writing",
+        "rebooting", "confirming", "succeeded", "failed", "uncertain"
+    }
+    TERMINAL_PHASES = {"succeeded", "failed"}
+
+    @staticmethod
+    def _reject_duplicate_keys(pairs):
+        d = {}
+        for k, v in pairs:
+            if k in d:
+                raise ValueError(f"Duplicate key in JSON: {k}")
+            d[k] = v
+        return d
+
+    def __init__(self, path: str):
+        self.path = os.path.abspath(path)
+        self.lock = threading.RLock()
+        self.jobs: Dict[str, Dict[str, Any]] = {}
+        self._fault: Optional[str] = None
+        self._load()
+
+    @staticmethod
+    def _normalize_location(loc: Any) -> Optional[str]:
+        if not isinstance(loc, str):
+            return None
+        loc = loc.strip()
+        if not loc:
+            return None
+        if ":" in loc:
+            loc = loc.split(":", 1)[0].strip()
+        return loc if loc else None
+
+    @staticmethod
+    def _get_serial(ser: Any) -> Optional[str]:
+        if not isinstance(ser, str):
+            return None
+        ser = ser.strip()
+        return ser if ser else None
+
+    def _is_usb_match(self, id1: Dict[str, Any], id2: Dict[str, Any]) -> bool:
+        loc1 = self._normalize_location(id1.get("usb_location"))
+        loc2 = self._normalize_location(id2.get("usb_location"))
+        ser1 = self._get_serial(id1.get("usb_serial"))
+        ser2 = self._get_serial(id2.get("usb_serial"))
+
+        if loc1 is not None and loc2 is not None:
+            if loc1 != loc2:
+                return False
+            if ser1 is not None and ser2 is not None:
+                return ser1 == ser2
+            return True
+
+        if ser1 is not None and ser2 is not None:
+            return ser1 == ser2
+
+        return False
+
+    def _is_identity_conflict(self, id1: Dict[str, Any], id2: Dict[str, Any]) -> bool:
+        imei1 = id1.get("imei")
+        imei2 = id2.get("imei")
+        if imei1 and imei2 and imei1 == imei2:
+            return True
+        dev1 = id1.get("device_id")
+        dev2 = id2.get("device_id")
+        if dev1 and dev2 and dev1 == dev2:
+            return True
+        return self._is_usb_match(id1, id2)
+
+    def _validate_stored_job(self, job: Dict[str, Any]) -> Optional[str]:
+        required_fields = (
+            "job_id", "device_id", "owner", "mode", "phase", "identity",
+            "package_id", "expected", "started_at", "result", "error",
+            "effect_started", "process_stopped", "updated_at"
+        )
+        for field in required_fields:
+            if field not in job:
+                return f"missing field '{field}'"
+
+        if not isinstance(job["job_id"], str) or not job["job_id"].strip():
+            return "invalid job_id"
+        if not isinstance(job["device_id"], str) or not job["device_id"].strip():
+            return "invalid device_id"
+        if not isinstance(job["owner"], str):
+            return "invalid owner"
+        if job["mode"] not in ("sota", "script"):
+            return f"invalid mode '{job['mode']}'"
+        if job["phase"] not in self.VALID_PHASES:
+            return f"invalid phase '{job['phase']}'"
+        if not isinstance(job["package_id"], str) or len(job["package_id"]) != 64 or not re.fullmatch(r"[0-9a-f]{64}", job["package_id"]):
+            return "invalid package_id"
+        if not isinstance(job["started_at"], (int, float)):
+            return "invalid started_at"
+        if not isinstance(job["updated_at"], (int, float)):
+            return "invalid updated_at"
+        if job["result"] is not None and not isinstance(job["result"], str):
+            return "invalid result"
+        if not isinstance(job["error"], str):
+            return "invalid error"
+        if not isinstance(job["effect_started"], bool):
+            return "invalid effect_started"
+        if not isinstance(job["process_stopped"], bool):
+            return "invalid process_stopped"
+        if job["phase"] in ("succeeded", "failed"):
+            if not job["process_stopped"]:
+                return f"terminal phase '{job['phase']}' requires process_stopped to be true"
+            if job["phase"] == "succeeded" and not job["effect_started"]:
+                return "phase 'succeeded' requires effect_started to be true"
+
+        expected = job["expected"]
+        if not isinstance(expected, dict):
+            return "expected must be dict"
+        for k in ("version", "build_id", "old_boot_id"):
+            if k not in expected:
+                return f"expected missing '{k}'"
+        if not isinstance(expected["version"], str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", expected["version"]):
+            return "invalid expected.version"
+        if not isinstance(expected["build_id"], str) or len(expected["build_id"]) != 64 or not re.fullmatch(r"[0-9a-f]{64}", expected["build_id"]):
+            return "invalid expected.build_id"
+        if expected["old_boot_id"] is not None and not isinstance(expected["old_boot_id"], str):
+            return "invalid expected.old_boot_id"
+
+        identity = job["identity"]
+        if not isinstance(identity, dict):
+            return "identity must be dict"
+        for k in ("imei", "device_id", "model", "chip", "core_version", "port"):
+            v = identity.get(k)
+            if not isinstance(v, str) or not v.strip():
+                return f"identity missing/empty '{k}'"
+            if k in ("model", "chip", "core_version") and v.strip().lower() == "unknown":
+                return f"identity.{k} cannot be unknown"
+        if job["device_id"] != identity.get("device_id"):
+            return "device_id does not match identity.device_id"
+        loc = identity.get("usb_location")
+        ser = identity.get("usb_serial")
+        has_loc = isinstance(loc, str) and bool(loc.strip())
+        has_ser = isinstance(ser, str) and bool(ser.strip())
+        if not (has_loc or has_ser):
+            return "identity must have non-empty usb_location or usb_serial"
+        if loc is not None and (not isinstance(loc, str) or not loc.strip()):
+            return "invalid usb_location in identity"
+        if ser is not None and (not isinstance(ser, str) or not ser.strip()):
+            return "invalid usb_serial in identity"
+
+        return None
+
+    def _load(self):
+        with self.lock:
+            if not os.path.exists(self.path):
+                self.jobs = {}
+                return
+
+            try:
+                with open(self.path, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except Exception as e:
+                self._fault = f"Failed to read update jobs file: {e}"
+                return
+
+            if not content.strip():
+                self._fault = "Empty update jobs file"
+                return
+
+            try:
+                data = json.loads(content, object_pairs_hook=self._reject_duplicate_keys)
+            except Exception as e:
+                self._fault = f"Bad JSON in update jobs file: {e}"
+                return
+
+            if not isinstance(data, dict) or set(data.keys()) != {"jobs"} or not isinstance(data["jobs"], dict):
+                self._fault = "Invalid schema in update jobs file: expected {'jobs': dict}"
+                return
+
+            raw_jobs = data["jobs"]
+            parsed_jobs = {}
+            for k, job in raw_jobs.items():
+                if not isinstance(k, str) or not isinstance(job, dict):
+                    self._fault = f"Job record '{k}' is invalid"
+                    return
+                if k != job.get("job_id"):
+                    self._fault = f"Job key '{k}' does not match job_id '{job.get('job_id')}'"
+                    return
+                err = self._validate_stored_job(job)
+                if err:
+                    self._fault = f"Stored job '{k}' validation failed: {err}"
+                    return
+                parsed_jobs[job["job_id"]] = job
+
+            has_uncompleted = False
+            for job in parsed_jobs.values():
+                if job.get("phase") not in self.TERMINAL_PHASES:
+                    job["phase"] = "uncertain"
+                    job["result"] = "uncertain"
+                    job["process_stopped"] = False
+                    job["updated_at"] = time.time()
+                    has_uncompleted = True
+
+            self.jobs = parsed_jobs
+            if has_uncompleted:
+                try:
+                    self._persist_locked()
+                except Exception as e:
+                    self._fault = f"Failed to persist recovered jobs: {e}"
+
+    def _persist_locked(self):
+        dir_name = os.path.dirname(self.path) or "."
+        temp_path = os.path.join(dir_name, f".{os.path.basename(self.path)}.{uuid.uuid4().hex}.tmp")
+        try:
+            payload = {
+                "jobs": self.jobs
+            }
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, self.path)
+        except Exception as e:
+            self._fault = f"Persistence failure: {e}"
+            raise
+
+    def reserve(self, job_id: str, identity: Dict[str, Any], mode: str,
+                package_id: str, expected: Dict[str, Any]) -> Dict[str, Any]:
+        with self.lock:
+            if self._fault:
+                raise RuntimeError(f"UpdateJobStore fault: {self._fault}")
+
+            if not isinstance(job_id, str) or not job_id.strip():
+                raise ValueError("job_id must be non-empty str")
+
+            if mode not in ("sota", "script"):
+                raise ValueError("mode must be 'sota' or 'script'")
+
+            if not isinstance(package_id, str) or len(package_id) != 64 or not re.fullmatch(r"[0-9a-f]{64}", package_id):
+                raise ValueError("package_id must be 64-character lowercase hex string")
+
+            if not isinstance(expected, dict):
+                raise ValueError("expected must be a dict")
+            for k in ("version", "build_id", "old_boot_id"):
+                if k not in expected:
+                    raise ValueError(f"expected missing '{k}'")
+            version = expected["version"]
+            if not isinstance(version, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
+                raise ValueError("expected.version must be three-part ASCII numeric version (e.g. 1.0.0)")
+            build_id = expected["build_id"]
+            if not isinstance(build_id, str) or len(build_id) != 64 or not re.fullmatch(r"[0-9a-f]{64}", build_id):
+                raise ValueError("expected.build_id must be 64-character lowercase hex string")
+            old_boot_id = expected["old_boot_id"]
+            if old_boot_id is not None and not isinstance(old_boot_id, str):
+                raise ValueError("expected.old_boot_id must be str or None")
+
+            if not isinstance(identity, dict):
+                raise ValueError("identity must be a dict")
+            for k in ("imei", "device_id", "model", "chip", "core_version", "port"):
+                v = identity.get(k)
+                if not isinstance(v, str) or not v.strip():
+                    raise ValueError(f"identity.{k} must be non-empty str")
+                if k in ("model", "chip", "core_version") and v.strip().lower() == "unknown":
+                    raise ValueError(f"identity.{k} cannot be unknown")
+            loc = identity.get("usb_location")
+            ser = identity.get("usb_serial")
+            has_loc = isinstance(loc, str) and bool(loc.strip())
+            has_ser = isinstance(ser, str) and bool(ser.strip())
+            if not (has_loc or has_ser):
+                raise ValueError("identity must have non-empty usb_location or usb_serial")
+            if loc is not None and (not isinstance(loc, str) or not loc.strip()):
+                raise ValueError("identity.usb_location must be non-empty str if present")
+            if ser is not None and (not isinstance(ser, str) or not ser.strip()):
+                raise ValueError("identity.usb_serial must be non-empty str if present")
+
+            if job_id in self.jobs:
+                existing = self.jobs[job_id]
+                if (existing.get("mode") == mode and
+                    existing.get("package_id") == package_id and
+                    existing.get("identity") == identity and
+                    existing.get("expected") == expected):
+                    return copy.deepcopy(existing)
+                raise ValueError(f"Job {job_id} already exists with different parameters")
+
+            for existing in self.jobs.values():
+                if existing.get("phase") in self.TERMINAL_PHASES:
+                    continue
+                if self._is_identity_conflict(identity, existing.get("identity", {})):
+                    raise RuntimeError(f"Device or USB binding busy with active job {existing.get('job_id')}")
+
+            now = time.time()
+            job = {
+                "job_id": job_id,
+                "device_id": identity["device_id"],
+                "owner": "hub",
+                "mode": mode,
+                "phase": "preflight",
+                "identity": copy.deepcopy(identity),
+                "package_id": package_id,
+                "expected": copy.deepcopy(expected),
+                "started_at": now,
+                "updated_at": now,
+                "result": None,
+                "error": "",
+                "effect_started": False,
+                "process_stopped": True,
+            }
+
+            self.jobs[job_id] = job
+            self._persist_locked()
+            return copy.deepcopy(job)
+
+    def get(self, job_id: str) -> Optional[Dict[str, Any]]:
+        with self.lock:
+            if self._fault:
+                raise RuntimeError(f"UpdateJobStore fault: {self._fault}")
+            if not isinstance(job_id, str):
+                return None
+            job = self.jobs.get(job_id)
+            if job is None:
+                return None
+            return copy.deepcopy(job)
+
+    def active(self, identity: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        with self.lock:
+            if self._fault:
+                raise RuntimeError(f"UpdateJobStore fault: {self._fault}")
+            if not isinstance(identity, dict):
+                raise ValueError("identity must be a dict")
+
+            matches = []
+            for job in self.jobs.values():
+                if job.get("phase") in self.TERMINAL_PHASES:
+                    continue
+                if self._is_identity_conflict(identity, job.get("identity", {})):
+                    matches.append(job)
+
+            if len(matches) > 1:
+                raise RuntimeError(f"Multiple active jobs conflict with identity: {[j['job_id'] for j in matches]}")
+            if len(matches) == 1:
+                return copy.deepcopy(matches[0])
+            return None
+
+    def transition(self, job_id: str, device_id: str, phase: str, *,
+                   effect_started: Optional[bool] = None,
+                   process_stopped: Optional[bool] = None,
+                   error: str = "",
+                   confirmed: bool = False) -> Dict[str, Any]:
+        with self.lock:
+            if self._fault:
+                raise RuntimeError(f"UpdateJobStore fault: {self._fault}")
+
+            if effect_started is not None and not isinstance(effect_started, bool):
+                raise ValueError("effect_started must be None or bool")
+            if process_stopped is not None and not isinstance(process_stopped, bool):
+                raise ValueError("process_stopped must be None or bool")
+            if not isinstance(confirmed, bool):
+                raise ValueError("confirmed must be bool")
+
+            if job_id not in self.jobs:
+                raise KeyError(f"Job {job_id} not found")
+
+            job = self.jobs[job_id]
+            if job.get("device_id") != device_id:
+                raise ValueError(f"device_id mismatch: job {job_id} belongs to {job.get('device_id')}, got {device_id}")
+
+            if phase not in self.VALID_PHASES:
+                raise ValueError(f"Invalid phase '{phase}'")
+
+            if job.get("phase") in self.TERMINAL_PHASES:
+                raise RuntimeError(f"Job {job_id} is already terminal ({job.get('phase')}) and cannot be changed")
+
+            cur_effect = bool(job.get("effect_started", False))
+            if effect_started is True:
+                new_effect = True
+            else:
+                new_effect = cur_effect
+
+            if phase in ("receiving", "writing", "rebooting"):
+                new_effect = True
+
+            cur_stopped = bool(job.get("process_stopped", True))
+            if process_stopped is not None:
+                new_stopped = process_stopped
+            else:
+                new_stopped = cur_stopped
+
+            if phase == "succeeded":
+                if new_stopped is True and confirmed is True and job.get("phase") == "confirming" and new_effect is True:
+                    final_phase = "succeeded"
+                else:
+                    final_phase = "uncertain"
+            elif phase == "failed":
+                if new_stopped is True and ((not new_effect) or confirmed is True):
+                    final_phase = "failed"
+                else:
+                    final_phase = "uncertain"
+            elif phase == "uncertain":
+                final_phase = "uncertain"
+            else:
+                final_phase = phase
+
+            job["phase"] = final_phase
+            if final_phase in self.TERMINAL_PHASES:
+                job["result"] = final_phase
+            elif final_phase == "uncertain":
+                job["result"] = "uncertain"
+            job["effect_started"] = new_effect
+            job["process_stopped"] = new_stopped
+            if error:
+                job["error"] = str(error)
+            job["updated_at"] = time.time()
+
+            self._persist_locked()
+            return copy.deepcopy(job)
+
+
+# =========================================================================
 # 核心类：GatewayHub (网关多路共享中枢与广播总线)
 # =========================================================================
 
@@ -1121,6 +1707,9 @@ class GatewayHub:
         self.clients: List[socket.socket] = []
         self.clients_lock = threading.Lock()
         self.serial_paused = False
+
+        # 维护任务存储 (AIR-38 S04A)
+        self.update_jobs = UpdateJobStore(os.path.join(DATA_DIR, "update_jobs.json"))
 
         # 动态会话池
         self.session_pool = DongleSessionPool(self)
@@ -1151,6 +1740,253 @@ class GatewayHub:
                 f.write(self.internal_session_token)
         except Exception as e:
             log(f"写入 .hub_session_token 异常: {e}")
+
+    def capture_update_identity(self, slot: str) -> Dict[str, Any]:
+        """显式卡槽捕获最新准确设备身份与唯一 USB 物理拓扑 (AIR-38 S04B)"""
+        if not slot or not isinstance(slot, str) or not slot.strip():
+            raise ValueError("slot must be non-empty string")
+        slot_str = slot.strip()
+        session = self.session_pool.get_session(slot_str, active_only=True)
+        if not session:
+            raise RuntimeError(f"Slot '{slot_str}' has no active session or is disconnected")
+
+        now = time.time()
+        seen_at = float(session.meta.get("_identity_seen_at") or 0.0)
+        if not seen_at or (now - seen_at > 15.0):
+            raise RuntimeError(f"Device on slot '{slot_str}' has no complete identity frame within 15 seconds")
+
+        reported_imei = session.meta.get("reported_imei")
+        reported_model = session.meta.get("reported_model")
+        reported_chip = session.meta.get("reported_chip")
+        core_version = session.meta.get("core_version")
+
+        for name, val in [("imei", reported_imei), ("model", reported_model), ("chip", reported_chip), ("core_version", core_version)]:
+            if not isinstance(val, str) or not val.strip():
+                raise ValueError(f"Device on slot '{slot_str}' missing or empty {name}")
+            if val.strip().lower() == "unknown":
+                raise ValueError(f"Device on slot '{slot_str}' {name} cannot be unknown")
+
+        imei = reported_imei.strip()
+        device_id = f"imei:{imei}"
+        model = reported_model.strip()
+        chip = reported_chip.strip()
+        raw_core = str(core_version)
+
+        all_coms = list(serial.tools.list_ports.comports())
+        matching_ports = [p for p in all_coms if (getattr(p, "device", "") or "").upper() == session.port.upper()]
+        if len(matching_ports) != 1:
+            raise RuntimeError(f"Session port '{session.port}' does not uniquely match in comports (found {len(matching_ports)})")
+        cur_p = matching_ports[0]
+
+        cur_loc = (getattr(cur_p, "location", "") or "").strip()
+        cur_ser = (getattr(cur_p, "serial_number", "") or "").strip()
+
+        sess_loc = (session.loc or "").strip()
+        if sess_loc and cur_loc:
+            norm_sess = UpdateJobStore._normalize_location(sess_loc)
+            norm_cur = UpdateJobStore._normalize_location(cur_loc)
+            if norm_sess and norm_cur and norm_sess != norm_cur:
+                raise RuntimeError(f"Session port '{session.port}' USB root mismatch: '{norm_cur}' != '{norm_sess}'")
+
+        if not (cur_loc or cur_ser):
+            raise RuntimeError(f"Session port '{session.port}' has neither usb_location nor usb_serial")
+
+        cur_root = UpdateJobStore._normalize_location(cur_loc)
+        ctrl_candidates = []
+        for p in all_coms:
+            p_dev = getattr(p, "device", "") or ""
+            if not p_dev or p_dev.upper() == session.port.upper():
+                continue
+            p_loc = (getattr(p, "location", "") or "").strip()
+            p_ser = (getattr(p, "serial_number", "") or "").strip()
+            p_hwid = (getattr(p, "hwid", "") or "").upper()
+            p_root = UpdateJobStore._normalize_location(p_loc)
+
+            is_same_usb = False
+            if cur_root and p_root:
+                if cur_root == p_root:
+                    if cur_ser and p_ser:
+                        is_same_usb = (cur_ser == p_ser)
+                    else:
+                        is_same_usb = True
+            elif cur_ser and p_ser:
+                is_same_usb = (cur_ser == p_ser)
+
+            if not is_same_usb:
+                continue
+
+            p_loc_upper = p_loc.upper()
+            if p_loc_upper.endswith("X.2") or ":X.2" in p_loc_upper or p_loc_upper.endswith(".2") or "MI_02" in p_hwid:
+                ctrl_candidates.append(p_dev)
+
+        control_port = ctrl_candidates[0] if len(ctrl_candidates) == 1 else ""
+
+        identity: Dict[str, Any] = {
+            "slot": session.slot_id,
+            "port": session.port,
+            "imei": imei,
+            "device_id": device_id,
+            "model": model,
+            "chip": chip,
+            "core_version": raw_core,
+        }
+        if cur_loc:
+            identity["usb_location"] = cur_loc
+        if cur_ser:
+            identity["usb_serial"] = cur_ser
+        if control_port:
+            identity["control_port"] = control_port
+        else:
+            identity["control_port"] = ""
+
+        for k in ("boot_id", "build_id", "version", "serial_ota"):
+            v = session.meta.get(k)
+            if v is not None and v != "":
+                identity[k] = v
+
+        return identity
+
+    def bind_update_session(self, session: DongleSession) -> Optional[Dict[str, Any]]:
+        """纯枚举当前 port USB 身份与真实 reported_imei，绑定或重算更新维护态 (AIR-38 S04B)"""
+        matching_ports = []
+        try:
+            for p in serial.tools.list_ports.comports():
+                dev = getattr(p, "device", "") or ""
+                if dev.upper() == session.port.upper():
+                    matching_ports.append(p)
+        except Exception as e:
+            log(f"[{session.slot_id}] bind_update_session 枚举串口异常: {e}")
+            session.maintenance_job = None
+            session.is_flashing = True
+            session._serial_io_paused = True
+            with session.serial_lock:
+                if session.ser:
+                    try:
+                        session.ser.close()
+                    except Exception:
+                        pass
+                    session.ser = None
+                session.is_connected = False
+                session.meta["online"] = False
+            return None
+
+        if len(matching_ports) > 1:
+            log(f"[{session.slot_id}] bind_update_session 发现重复同名COM口: {session.port}")
+            session.maintenance_job = None
+            session.is_flashing = True
+            session._serial_io_paused = True
+            with session.serial_lock:
+                if session.ser:
+                    try:
+                        session.ser.close()
+                    except Exception:
+                        pass
+                    session.ser = None
+                session.is_connected = False
+                session.meta["online"] = False
+            return None
+
+        if len(matching_ports) == 0:
+            session.is_flashing = True
+            session._serial_io_paused = True
+            with session.serial_lock:
+                if session.ser:
+                    try:
+                        session.ser.close()
+                    except Exception:
+                        pass
+                    session.ser = None
+                session.is_connected = False
+                session.meta["online"] = False
+            return copy.deepcopy(session.maintenance_job) if session.maintenance_job else None
+
+        p = matching_ports[0]
+        cur_loc = (getattr(p, "location", "") or "").strip()
+        cur_ser = (getattr(p, "serial_number", "") or "").strip()
+
+        query_id: Dict[str, Any] = {"port": session.port}
+        if cur_loc:
+            query_id["usb_location"] = cur_loc
+        if cur_ser:
+            query_id["usb_serial"] = cur_ser
+
+        reported_imei = str(session.meta.get("reported_imei") or "").strip()
+        if reported_imei and reported_imei.lower() != "unknown":
+            query_id["imei"] = reported_imei
+            query_id["device_id"] = f"imei:{reported_imei}"
+
+        matched_job = None
+        store_fault = False
+        try:
+            if hasattr(self, "update_jobs"):
+                matched_job = self.update_jobs.active(query_id)
+        except Exception as e:
+            log(f"[{session.slot_id}] bind_update_session 查询 active 任务异常/故障: {e}")
+            store_fault = True
+
+        if store_fault:
+            session.maintenance_job = None
+            session.is_flashing = True
+            session._serial_io_paused = True
+            with session.serial_lock:
+                if session.ser:
+                    try:
+                        session.ser.close()
+                    except Exception:
+                        pass
+                    session.ser = None
+                session.is_connected = False
+                session.meta["online"] = False
+            return None
+
+        if matched_job is not None:
+            job_identity = matched_job.get("identity") or {}
+            job_imei = str(job_identity.get("imei") or "").strip()
+            if not job_imei:
+                job_dev = str(matched_job.get("device_id") or "").strip()
+                if job_dev.startswith("imei:"):
+                    job_imei = job_dev[5:].strip()
+
+            if reported_imei and job_imei and reported_imei != job_imei:
+                log(f"[{session.slot_id}] 命中任务 {matched_job.get('job_id')} 但 reported_imei '{reported_imei}' 与任务 imei '{job_imei}' 不一致，禁止 IO")
+                session.maintenance_job = None
+                session.is_flashing = True
+                session._serial_io_paused = True
+                with session.serial_lock:
+                    if session.ser:
+                        try:
+                            session.ser.close()
+                        except Exception:
+                            pass
+                        session.ser = None
+                    session.is_connected = False
+                    session.meta["online"] = False
+                return None
+
+            session.maintenance_job = copy.deepcopy(matched_job)
+            session.is_flashing = True
+            mode = matched_job.get("mode")
+            phase = matched_job.get("phase")
+            if mode == "script" and phase != "confirming":
+                session._serial_io_paused = True
+                with session.serial_lock:
+                    if session.ser:
+                        try:
+                            session.ser.close()
+                        except Exception:
+                            pass
+                        session.ser = None
+                    session.is_connected = False
+                    session.meta["online"] = False
+            else:
+                session._serial_io_paused = False
+
+            return copy.deepcopy(matched_job)
+
+        session.maintenance_job = None
+        session.is_flashing = False
+        session._serial_io_paused = False
+        return None
 
     def _load_notify_config(self) -> Dict[str, Any]:
         """加载通知配置"""
@@ -1603,6 +2439,281 @@ class GatewayHub:
             "cards": cards,
             "timestamp": time.time()
         }
+
+    def _handle_update_management(self, cmd_obj: Dict[str, Any], is_internal_master: bool) -> Optional[Dict[str, Any]]:
+        """Hub 固件与脚本维护原子状态机管控接口 (AIR-38 S04C1)"""
+        if not isinstance(cmd_obj, dict):
+            return None
+        cmd = cmd_obj.get("cmd")
+        if not isinstance(cmd, str):
+            return None
+
+        mgmt_cmds = {"capture_update_identity", "get_update_job", "pause_for_flash", "update_job_result", "resume_after_flash"}
+        disabled_serial = {"pause_serial", "resume_serial"}
+        staged_ota = {"ota_start", "ota_chunk", "chunk", "ota_finish", "finish", "ota_abort", "abort", "get_fota_status", "ota_get_fota_status"}
+
+        if cmd not in mgmt_cmds and cmd not in disabled_serial and cmd not in staged_ota:
+            return None
+
+        req_id = cmd_obj.get("id")
+
+        def reply(ok: bool, code: int, msg: str, error: str = "", data: Any = None) -> Dict[str, Any]:
+            res: Dict[str, Any] = {"type": "res", "ok": ok, "code": code, "msg": msg, "error": error, "data": data}
+            if req_id is not None:
+                res["id"] = req_id
+            return res
+
+        if not is_internal_master:
+            return reply(False, 403, "FORBIDDEN", error="Internal management command requires master authorization")
+
+        if cmd in disabled_serial:
+            return reply(False, 400, "COMMAND_DISABLED", error=f"'{cmd}' is disabled; use pause_for_flash or resume_after_flash")
+
+        if cmd in staged_ota:
+            return reply(False, 503, "SERVICE_UNAVAILABLE", error=f"'{cmd}' is staged for next slice wiring and not allowed for passthrough")
+
+        params = cmd_obj.get("params") or {}
+        if not isinstance(params, dict):
+            params = {}
+
+        def find_exact_session(target_id: Dict[str, Any]) -> Optional[Any]:
+            with self.session_pool.pool_lock:
+                sessions = list(self.session_pool.sessions.values())
+            try:
+                coms = list(serial.tools.list_ports.comports())
+            except Exception:
+                return None
+            target_imei = str(target_id.get("imei") or "").strip()
+            matched = []
+            for s in sessions:
+                s_ports = [p for p in coms if (getattr(p, "device", "") or "").upper() == s.port.upper()]
+                if len(s_ports) != 1:
+                    continue
+                p = s_ports[0]
+                loc = (getattr(p, "location", "") or "").strip()
+                ser = (getattr(p, "serial_number", "") or "").strip()
+                if not (loc or ser) or not self.update_jobs._is_usb_match(target_id, {"usb_location": loc, "usb_serial": ser}):
+                    continue
+                rep_imei = str(s.meta.get("reported_imei") or "").strip()
+                if rep_imei and rep_imei.lower() != "unknown" and target_imei and rep_imei != target_imei:
+                    continue
+                matched.append(s)
+            return matched[0] if len(matched) == 1 else None
+
+        if cmd == "capture_update_identity":
+            slot = str(cmd_obj.get("slot") or params.get("slot") or "").strip()
+            if not slot:
+                return reply(False, 400, "INVALID_PARAM", error="Explicit slot is required")
+            try:
+                identity = self.capture_update_identity(slot)
+                return reply(True, 0, "IDENTITY_CAPTURED", data={"identity": identity, **identity})
+            except Exception as e:
+                return reply(False, 500, "CAPTURE_FAILED", error=str(e))
+
+        if cmd == "get_update_job":
+            job_id = str(params.get("job_id") or cmd_obj.get("job_id") or "").strip()
+            if not job_id:
+                return reply(False, 400, "INVALID_PARAM", error="job_id is required")
+            try:
+                job = self.update_jobs.get(job_id)
+            except Exception as e:
+                return reply(False, 500, "STORE_ERROR", error=str(e))
+            if not job:
+                return reply(False, 404, "JOB_NOT_FOUND", error=f"Job {job_id} not found")
+            sess = find_exact_session(job.get("identity") or {})
+            slot = sess.slot_id if sess else None
+            job["slot"] = slot
+            job["job"] = job.get("job_id")
+            job["device"] = job.get("device_id")
+            job["pkg"] = job.get("package_id")
+            return reply(True, 0, "OK", data=job)
+
+        if cmd == "pause_for_flash":
+            slot = str(cmd_obj.get("slot") or params.get("slot") or "").strip()
+            if not slot:
+                return reply(False, 400, "INVALID_PARAM", error="Explicit slot is required")
+            mode = str(params.get("mode") or cmd_obj.get("mode") or "").strip()
+            if mode not in ("sota", "script"):
+                return reply(False, 400, "INVALID_PARAM", error="mode must be 'sota' or 'script'")
+            job_id = str(params.get("job_id") or cmd_obj.get("job_id") or params.get("job") or "").strip()
+            pkg_id = str(params.get("package_id") or cmd_obj.get("package_id") or params.get("pkg") or "").strip()
+            if not job_id or not pkg_id:
+                return reply(False, 400, "INVALID_PARAM", error="job_id and package_id must be non-empty")
+            if len(pkg_id) != 64 or not re.fullmatch(r"[0-9a-f]{64}", pkg_id):
+                return reply(False, 400, "INVALID_PARAM", error="package_id must be 64-character lowercase hex string")
+            params_id = params.get("identity")
+            if not isinstance(params_id, dict):
+                return reply(False, 400, "INVALID_PARAM", error="params.identity must be a dict")
+            expected = params.get("expected")
+            if not isinstance(expected, dict):
+                return reply(False, 400, "INVALID_PARAM", error="params.expected must be a dict")
+            expected = copy.deepcopy(expected)
+
+            try:
+                cap_id = self.capture_update_identity(slot)
+            except Exception as e:
+                active_j = None
+                try:
+                    s = self.session_pool.get_session(slot)
+                    if s and s.maintenance_job:
+                        active_j = s.maintenance_job
+                except Exception:
+                    pass
+                return reply(False, 500, "CAPTURE_FAILED", error=f"Fresh capture failed: {e}", data={"active_job": active_j} if active_j else None)
+
+            strict_keys = ("device_id", "imei", "model", "chip", "core_version", "port", "usb_location", "usb_serial", "control_port", "boot_id", "version")
+            for k in strict_keys:
+                if str(params_id.get(k) or "").strip() != str(cap_id.get(k) or "").strip():
+                    return reply(False, 400, "IDENTITY_MISMATCH", error=f"identity mismatch on '{k}'")
+
+            exp_v = expected.get("version")
+            if not isinstance(exp_v, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", exp_v):
+                return reply(False, 400, "INVALID_PARAM", error="expected.version must be three-part ASCII numeric")
+            exp_b = expected.get("build_id")
+            if not isinstance(exp_b, str) or len(exp_b) != 64 or not re.fullmatch(r"[0-9a-f]{64}", exp_b):
+                return reply(False, 400, "INVALID_PARAM", error="expected.build_id must be 64-hex lowercase string")
+
+            cap_boot = str(cap_id.get("boot_id") or "").strip()
+            old_boot_str = str(expected.get("old_boot_id") or "").strip()
+            if mode == "sota":
+                if not old_boot_str or not cap_boot or old_boot_str != cap_boot:
+                    return reply(False, 400, "INVALID_PARAM", error="sota requires matching old_boot_id from capture")
+                expected["old_boot_id"] = old_boot_str
+            else:
+                if old_boot_str:
+                    if cap_boot and old_boot_str != cap_boot:
+                        return reply(False, 400, "INVALID_PARAM", error="script old_boot_id must match capture if provided")
+                    expected["old_boot_id"] = old_boot_str
+                else:
+                    expected["old_boot_id"] = None
+            expected["ota_id"] = f"ota_{job_id}"
+
+            try:
+                exist_job = self.update_jobs.get(job_id)
+                if exist_job and exist_job.get("phase") != "preflight":
+                    return reply(False, 409, "BUSY", error=f"Job {job_id} already active in '{exist_job.get('phase')}'", data={"active_job": exist_job})
+                act_job = self.update_jobs.active(cap_id)
+                if act_job and act_job.get("job_id") != job_id:
+                    return reply(False, 409, "BUSY", error=f"Device busy with active job {act_job.get('job_id')}", data={"active_job": act_job})
+                reserved = self.update_jobs.reserve(job_id, cap_id, mode, pkg_id, expected)
+            except Exception as e:
+                act = None
+                try:
+                    act = self.update_jobs.active(cap_id)
+                except Exception:
+                    pass
+                if act:
+                    return reply(False, 409, "BUSY", error=str(e), data={"active_job": act})
+                return reply(False, 500, "STORE_ERROR", error=str(e))
+
+            session = self.session_pool.get_session(slot, active_only=True)
+            if not session:
+                try:
+                    self.update_jobs.transition(job_id, cap_id["device_id"], "uncertain", error="Session lost after reserve")
+                except Exception:
+                    pass
+                return reply(False, 500, "PAUSE_FAILED", error="Session disconnected after reserve")
+
+            with session.serial_lock:
+                try:
+                    re_cap = self.capture_update_identity(slot)
+                    for k in strict_keys:
+                        if str(re_cap.get(k) or "").strip() != str(cap_id.get(k) or "").strip():
+                            raise RuntimeError(f"Identity changed under lock for '{k}'")
+                    session.pause_for_flash(reserved)
+                except Exception as e:
+                    try:
+                        self.update_jobs.transition(job_id, cap_id["device_id"], "uncertain", error=f"Pause lock error: {e}")
+                    except Exception:
+                        pass
+                    return reply(False, 500, "PAUSE_FAILED", error=f"Pause verification failed: {e}")
+
+            reserved["slot"] = slot
+            reserved["job"] = reserved.get("job_id")
+            reserved["device"] = reserved.get("device_id")
+            reserved["pkg"] = reserved.get("package_id")
+            return reply(True, 0, "PAUSED_FOR_FLASH", data=reserved)
+
+        if cmd == "update_job_result":
+            job_id = str(params.get("job_id") or cmd_obj.get("job_id") or "").strip()
+            dev_id = str(params.get("device_id") or cmd_obj.get("device_id") or "").strip()
+            pkg_id = str(params.get("package_id") or cmd_obj.get("package_id") or "").strip()
+            if not job_id or not dev_id or not pkg_id:
+                return reply(False, 400, "INVALID_PARAM", error="job_id, device_id, and package_id are all required")
+            if "confirmed" in params or "confirmed" in cmd_obj:
+                return reply(False, 400, "INVALID_PARAM", error="Parameter 'confirmed' cannot be set by client")
+            req_phase = str(params.get("phase") or cmd_obj.get("phase") or "").strip().lower()
+            if req_phase == "succeeded":
+                return reply(False, 400, "INVALID_PARAM", error="Phase 'succeeded' cannot be reported by client")
+            try:
+                job = self.update_jobs.get(job_id)
+            except Exception as e:
+                return reply(False, 500, "STORE_ERROR", error=str(e))
+            if not job:
+                return reply(False, 404, "JOB_NOT_FOUND", error=f"Job {job_id} not found")
+            if job.get("device_id") != dev_id or job.get("package_id") != pkg_id:
+                return reply(False, 400, "PARAM_MISMATCH", error="device_id or package_id mismatch with job record")
+            if job.get("phase") in UpdateJobStore.TERMINAL_PHASES:
+                return reply(False, 400, "TERMINAL_STATE", error=f"Job {job_id} is already in terminal state '{job.get('phase')}'")
+
+            err_text = str(params.get("error") or cmd_obj.get("error") or "").strip()
+            mode = job.get("mode")
+            try:
+                if mode == "sota":
+                    if req_phase != "uncertain":
+                        return reply(False, 400, "INVALID_PHASE", error="SOTA jobs only allow phase 'uncertain' from client")
+                    up_job = self.update_jobs.transition(job_id, dev_id, "uncertain", error=err_text)
+                else:
+                    if req_phase == "writing":
+                        up_job = self.update_jobs.transition(job_id, dev_id, "writing", effect_started=True, process_stopped=False, error=err_text)
+                    elif req_phase == "confirming":
+                        p_stop = bool(params.get("process_stopped"))
+                        w_done = bool(params.get("write_completed"))
+                        r_done = bool(params.get("reset_completed"))
+                        if p_stop and w_done and r_done:
+                            up_job = self.update_jobs.transition(job_id, dev_id, "confirming", process_stopped=True, effect_started=True, error=err_text)
+                            sess = find_exact_session(job.get("identity") or {})
+                            if sess:
+                                self.bind_update_session(sess)
+                        else:
+                            up_job = self.update_jobs.transition(job_id, dev_id, "uncertain", error=err_text or "Incomplete confirming flags")
+                    elif req_phase == "failed":
+                        p_stop = bool(params.get("process_stopped"))
+                        if p_stop:
+                            up_job = self.update_jobs.transition(job_id, dev_id, "failed", process_stopped=True, confirmed=True, error=err_text)
+                        else:
+                            up_job = self.update_jobs.transition(job_id, dev_id, "uncertain", process_stopped=False, error=err_text)
+                    else:
+                        up_job = self.update_jobs.transition(job_id, dev_id, "uncertain", error=err_text or f"Unsupported phase '{req_phase}'")
+                return reply(True, 0, "JOB_UPDATED", data=up_job)
+            except Exception as e:
+                return reply(False, 500, "STORE_ERROR", error=str(e))
+
+        if cmd == "resume_after_flash":
+            job_id = str(params.get("job_id") or cmd_obj.get("job_id") or "").strip()
+            dev_id = str(params.get("device_id") or cmd_obj.get("device_id") or "").strip()
+            if not job_id or not dev_id:
+                return reply(False, 400, "INVALID_PARAM", error="Both job_id and device_id are required")
+            try:
+                job = self.update_jobs.get(job_id)
+            except Exception as e:
+                return reply(False, 500, "STORE_ERROR", error=str(e))
+            if not job:
+                return reply(False, 404, "JOB_NOT_FOUND", error=f"Job {job_id} not found")
+            if job.get("device_id") != dev_id:
+                return reply(False, 400, "DEVICE_MISMATCH", error=f"device_id mismatch: job belongs to {job.get('device_id')}, got {dev_id}")
+
+            sess = find_exact_session(job.get("identity") or {})
+            if sess:
+                self.bind_update_session(sess)
+            slot = sess.slot_id if sess else None
+            job["slot"] = slot
+            job["job"] = job.get("job_id")
+            job["device"] = job.get("device_id")
+            job["pkg"] = job.get("package_id")
+            return reply(True, 0, "RESUMED", data=job)
+
+        return None
 
     def _handle_client_send(self, msg_str: str):
         """兼容单机/测试下发指令"""

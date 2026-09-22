@@ -2,6 +2,32 @@
 
 本项目遵循 [Semantic Versioning (语义化版本 2.0.0)](https://semver.org/lang/zh-CN/) 规范。
 
+## [v1.3.0] - 2026-09-18
+
+### 🎨 UI 通用能力抽离与 iPhone 灵动岛多风格一键切换 (AIR-37)
+- **独立顶层 UI 规范先行 (`specs/ui-design-system.md`)**：
+  - 建立统一 Design Tokens 调色板、字号阶梯、弹性动效曲线与人机大白话词表，作为全局 UI/UX 演进的事实源；
+- **双主题架构与严格 CSS 作用域隔离 (Zero-Pollution Guarantee)**：
+  - 保留原有经典的工整极客控制台 (`classic`) 作为出厂默认基线，100% 绝对保护现有使用习惯；
+  - 抽离 `ThemeManager`（`classic` / `island`），基于 `html[data-theme="..."]` 与 `localStorage`（`cellular_gateway_theme`）实现秒级无缝热切换；
+  - 顶栏右侧与系统设置抽屉接入“🎨 视觉风格”切换入口；
+- **iPhone 灵动通信岛组件 (`#dynamicIsland` & `DynamicIslandController`)**：
+  - 抽离前端轻量 `EventBus`，彻底解耦物理通信事件分发与界面渲染；
+  - 待机态呈现居中悬浮黑洞胶囊，动态响应底层实际 `slots` 卡槽数量（单卡单指示灯、多卡多指示灯，单多卡工程通用）；
+  - 收到新验证码时以水滴果冻流体弹性展开为 76px 空间悬浮卡片，展示金黄钥匙图标、卡槽来源、大字号等宽高亮验证码数字与复制胶囊；
+  - 内置悬停保护看门狗（Hover Pause Watchdog）：鼠标悬停时自动冻结 10s 回缩定时器，防止误触；
+- **消息排版大白话提炼与全域点击秒级直达 (`FeedFormatter`)**：
+  - 自动提炼正文首部机构签名（如 `【深度求索】`、`【中国联通】`），提升为主标题，消除 16 位长号杂音；
+  - 短信正文内的验证码数字自动渲染为 `.otp-text-highlight` 晶体底衬，点击正文数字同样秒级直写 Windows 剪贴板；
+  - 封装全局通用剪贴板工具 `copyTextWithFallback()`，双层兜底确保复制必达；
+- **Apple 空间微拟物折射、iOS 翠绿开关与 6px 极窄滚动条**：
+  - 灵动岛模式下硬件卡片注入 `0 1px 0 rgba(255,255,255,0.14) inset` 晶体微拟物折射高光；
+  - 4G 蜂窝数据开关切换为 iOS 经典翠绿色（`#10b981`）；
+  - 全局覆写定制 6px 极窄暗黑半透明滚动条，消灭 Windows 原生粗白滑块；
+- **全端自适应与双工程严格镜像**：
+  - 灵动岛宽度采用 `min(440px, calc(100vw - 24px))` 配合移动端顶栏动态补白，360×812 移动端 0 溢出穿模；
+  - `tools/cluster_gateway` 与 `tools/host_gateway` 的 `web/index.html` 保持 100% 字节级严格镜像同步。
+
 ## [v1.2.9] - 2026-09-18
 
 ### 🚀 工业级重大里程碑更新 (AIR-28 ~ AIR-36 全量闭环)

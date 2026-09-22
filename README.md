@@ -4,12 +4,12 @@
 
 [![Release](https://img.shields.io/badge/Release-v1.2.9-brightgreen.svg)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Hardware](https://img.shields.io/badge/SoC-Air780EPV%20%28EC718P--V%29%20%7C%20Air780E%20%28EC618%29-orange.svg)](#hardware-compatibility)
-[![Firmware](https://img.shields.io/badge/Firmware-LuatOS--SoC%20V2001-red.svg)](#firmware-download)
+[![Hardware](https://img.shields.io/badge/SoC-Air780EPV%20%7C%20Air780EPM%20%7C%20Air780E%2FEC-orange.svg)](#hardware-compatibility)
+[![Firmware](https://img.shields.io/badge/Firmware-LuatOS--SoC%20V2050%20%7C%20V2001%20%7C%20V1124-red.svg)](#firmware-download)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-blue.svg)](#system-compatibility)
 [![Push Channels](https://img.shields.io/badge/Push-Feishu%20%7C%20DingTalk%20%7C%20WeCom%20%7C%20Bark-brightgreen.svg)](#push-channels)
 [![AI Protocol](https://img.shields.io/badge/AI%20Protocol-FastMCP%20Ready-purple.svg)](tools/mcp_server/)
-[![Desktop App](https://img.shields.io/badge/Desktop-Standalone%20Exe%20%2827MB%29-success.svg)](#quickstart)
+[![Desktop App](https://img.shields.io/badge/Desktop-Standalone%20Exe%20%2855MB%29-success.svg)](#quickstart)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/ocean1798/Air780EPV-Smart-Gateway/pulls)
 
 **4G短信转发飞书/企微/Bark/自定义webhook | 验证码提取直写剪贴板 | 随身上网 | 0流量外卡/保号卡支持 | Agent MCP 通信接入 | Windows 绿色便携上位机**
@@ -23,8 +23,50 @@
 <a id="english-abstract"></a>
 ### English Abstract
 
-> **Air780EPV-Smart-Gateway** is an industrial-grade, zero-traffic 4G Cat.1 cellular dongle & IoT communication gateway powered by Air780EPV (Cortex-M4F EC718P-V) and LuatOS.
-> It features **native VoLTE / SMS over IMS** (full China Telecom/Mobile/Unicom/CBN support), **broadband-priority proxy push with Push ACK** (0 cellular traffic consumed when connected to a host PC), **multi-channel notification dispatch** (Feishu/DingTalk/WeCom/Bark/Custom Webhook), **anti-OOM cursor pagination** for low-RAM microcontrollers, **FastMCP AI Agent physical communication integration**, and an out-of-the-box **standalone 27MB Windows desktop app**.
+> **Air780EPV-Smart-Gateway** is an industrial-grade, zero-traffic 4G Cat.1 cellular dongle & IoT communication gateway powered by Air780EPV (Cortex-M4F EC718P-V), Air780EPM (EC718P/PM), and Air780E/EC (EC618) running LuatOS.
+> It features **native VoLTE / SMS over IMS** (full China Telecom/Mobile/Unicom/CBN support), **broadband-priority proxy push with Push ACK** (0 cellular traffic consumed when connected to a host PC), **multi-channel notification dispatch** (Feishu/DingTalk/WeCom/Bark/Custom Webhook), **anti-OOM cursor pagination** for low-RAM microcontrollers, **FastMCP AI Agent physical communication integration**, and an out-of-the-box **standalone ~55MB Windows desktop app**.
+
+---
+
+<a id="core-deliverables"></a>
+## 📦 最新核心资产一览 (Core Deliverables)
+
+为了方便开发者和外部用户快速上手，本项目所需的三大关键核心资产已全部在仓库中归档就绪：
+
+### 1️⃣ 最新的业务固件 (Gateway Firmware v1.2.9)
+- **版本标识**：**`v1.2.9`**（最新生产正式版）
+- **源码存储路径**：`deploy/smart-gateway-780epv/`
+- **全套脚本清单 (共 11 个文件，单一通用代码库 Single Codebase)**：
+  - `main.lua`：网关主控引导，初始化硬件看门狗、USB 虚拟串口（VUART 32）与 SIM 状态感知；
+  - `sms_service.lua`：短信事件监听、动态验证码（OTP）极速提取、0 Flash 磨损内存暂存与主机确认降级；
+  - `serial_comm.lua`：上位机 USB 虚拟串口通信协议栈（支持全双工 JSON 帧交互）；
+  - `call_service.lua`：VoLTE 蜂窝语音呼叫、15 秒防扣费振铃与接听秒挂断看门狗；
+  - `notify_service.lua`：飞书 / Webhook 自愈推送队列与网络超时熔断；
+  - `storage_service.lua`：板载 128KB LittleFS 离线脱机黑匣子环形持久化；
+  - `fota_service.lua`：空中升级与串口在线平滑更新驱动；
+  - `model.lua` / `led.lua` / `config.lua` / `reboot_service.lua`：芯片多型号自动识别、指示灯控制与远程软复位。
+- **架构自适应特性**：
+  同一套脚本烧录至 `Air780EPV`、`Air780EPM`、`Air780E/EC`，开机自动探测芯片身份：
+  - 遇到 **EC718PV**：自动点亮并激活 VoLTE 电话语音通话；
+  - 遇到 **EC718PM / EC618**：自动安全旁路语音库，专注短信、OTP 提取与网络数据，零报错、零死锁。
+
+### 2️⃣ 不同硬件版本的官方底包 (Core SOCs)
+底包文件统一保存在项目仓库 `deploy/core/` 目录下，烧录时根据硬件型号精准选取：
+
+| 硬件型号 | 芯片架构 | 官方推荐底层包文件名 (Core SOC) | 体积 | SHA256 完整校验和 | 核心特性与避坑提示 |
+| :--- | :--- | :--- | :---: | :--- | :--- |
+| **Air780EPV** | **移芯 EC718PV**<br>(二代旗舰) | `LuatOS-SoC_V2001_EC718PV_CLOUD.soc` | 7.26 MB | `1b9e8ea59e6aa5ca2de06f71be04359a5024d41565f044b2120b50d5a53f91e5` | **唯一语音底包**。集成 VoLTE 协议栈与音频编解码 Codec 驱动。支持电信短信与电话拨号。 |
+| **Air780EPM**<br>*(推荐性价比)* | **移芯 EC718P/PM**<br>(二代精简) | **`LuatOS-SoC_V2050_Air780EPM_103.soc`** | 6.44 MB | `ce640ab243f9d1721ee1ace00e377a02ea75df3ec43dfa66b9de463626e653b2` | **官方唯一推荐标准版**。内置完整 `sms` 短信库，预留 448KB 最大脚本空间。<br>⚠️ **致命红线：绝不能用 109 随身WiFi版，否则插卡崩溃死锁！** |
+| **Air780E / Air780EC** | **移芯 EC618**<br>(一代经典) | `LuatOS-SoC_V1124_EC618.soc` | 4.83 MB | `3af84bccfdfba8d83f8f5a03d721f268c8bd3fc82470e0681732ba2c43b85d2a` | **官方最新正式标准版**。一代成熟芯片标准底包。开机需长按 POW 键或短接 S2 硬件自启。 |
+
+### 3️⃣ 对应的上位机 Exe 程序 (Standalone Desktop App)
+- **主程序文件路径**：`tools/host_gateway/dist/Air780EPV-Gateway.exe`（单文件约 55MB 独立免安装版）
+- **备用经典版本**：`tools/host_gateway/dist/Air780EPV-Gateway-Classic-PreIsland.exe`（预发布纯净版）
+- **核心体验亮点**：
+  1. **零环境门槛**：内置 Python 3.12 精简运行时与全部依赖，无需安装任何环境，双击即可直接运行；
+  2. **多模组热插拔感知**：全自动识别插入电脑 USB 口的 4G 模组（COM8/COM12 等），即插即用组成多卡槽通信集群；
+  3. **自带可视化 Web 管理看板**：启动后后台静默常驻，在浏览器中打开 **`http://127.0.0.1:17801`** 即可查阅多卡槽状态、收发展现与配置系统；
+  4. **原生 AI Agent MCP 服务端**：原生暴露 Model Context Protocol (FastMCP) 接口，直接提供给 Claude Desktop、Cursor 或 Home Assistant 调用。
 
 ---
 
@@ -75,16 +117,40 @@
 
 ### 1. 模组与开发板兼容性矩阵
 
-| 硬件型号 / 开发板 | 主控 SoC / 架构 | 移动 / 联通 / 广电 | 电信 4G 短信 (SMS over IMS) | 来电 0 话费秒挂 | 4G 随身上网 (RNDIS) | 固件空中热更 (FOTA) | 选型建议与运行说明 |
+| 硬件型号 / 开发板 | 主控 SoC / 芯片架构 | 移动 / 联通 / 广电 | 电信 4G 短信 (SMS over IMS) | VoLTE 电话拨号 | 4G 随身上网 (RNDIS) | 固件空中热更 (FOTA) | 选型建议与运行说明 |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| **Air780EPV**<br>*(主力推荐)* | **移芯 EC718P-V**<br>(Cortex-M4F) | **100% 完美支持** | **100% 原生支持**<br>*(原生集成 IMS 协议栈)* | **支持** | **支持** | **支持** | **【强烈推荐】** 唯一兼备全网通电信短信、超强性能与丰富外设的主力硬件，首发必选。 |
-| **Air780E** | 移芯 EC618<br>(Cortex-M3) | **支持** | ❌ **不支持**<br>*(硬件缺少 IMS 栈)* | **支持** | **支持** | **支持** | 适合手头已有设备升级。仅建议使用移动或联通卡；插入电信卡将无法接收 4G 短信。 |
-| **Air780EC** | 移芯 EC618<br>(Cortex-M3) | **支持** | ❌ **不支持** | **支持** | **支持** | **支持** | 基础通信性能与 Air780E 一致，兼容移动与联通卡短信收发及 RNDIS 随身上网。 |
-| **Air700E** | 移芯 EC618<br>(Cortex-M3) | 仅支持中国移动<br>(B3/B8 频段) | ❌ **不支持** | **支持** | **支持** | **支持** | 极限低成本超小尺寸模组。硬件射频仅覆盖中国移动频段，仅支持移动卡。 |
-| **Air780EHM / EHV** | 移芯 EC618 衍生平台 | **支持** | ❌ **不支持** | **支持** | **支持** | **支持** | 电源增强款或工控行业款，基础短信转发与上位机通信指令集完全通用。 |
+| **Air780EPV**<br>*(主力推荐)* | **移芯 EC718P-V**<br>(二代 Cortex-M4F) | **100% 完美支持** | **100% 原生支持**<br>*(集成 IMS 协议栈)* | **✅ 唯一支持**<br>*(硬件语音编解码)* | **支持** | **支持** | **【强烈推荐·功能最全】** 唯一兼备全网通电信短信、VoLTE 紧急电话振铃与丰富外设的主力硬件，首发必选。 |
+| **Air780EPM**<br>*(性价比推荐)* | **移芯 EC718P/PM**<br>(二代精简版) | **100% 完美支持** | **支持** | ❌ 无语音协议栈<br>*(代码已安全旁路)* | **支持** | **支持** | **【二代性价比轻量首选】** 功耗低、发热极小，纯贴片模组上电自动开机，**必须使用 `_103.soc` 标准底包**做短信网关。 |
+| **Air780E / Air780EC** | 移芯 EC618<br>(一代 Cortex-M3) | **支持** | ❌ **不支持**<br>*(芯片硬件无 IMS 栈)* | ❌ 无语音协议栈 | **支持** | **支持** | **【经典一代评估板】** 适合已有板卡（如 `EVB_Air780X_V1.5`）。板载按键丰富，改 S2/R6 跳线即可实现通电自启。 |
+| **Air700E** | 移芯 EC618<br>(一代 Cortex-M3) | 仅支持中国移动<br>(B3/B8 频段) | ❌ **不支持** | ❌ 无语音协议栈 | **支持** | **支持** | 极限低成本超小尺寸模组。硬件射频仅覆盖中国移动频段，仅支持移动卡。 |
+| **Air780EHM / EHV** | 移芯 EC618 衍生平台 | **支持** | ❌ **不支持** | ❌ 无语音协议栈 | **支持** | **支持** | 电源增强款或工控行业款，基础短信转发与上位机通信指令集完全通用。 |
 
-> **⚠️ 为什么电信 4G 短信必须选 Air780EPV？**  
-> 中国电信 4G 网络不支持传统 2G/3G CSFB 回落，所有的短信下发必须通过 **SMS over IMS (VoLTE)** 隧道承载。旧款 EC618（Air780E/Air700E）由于芯片物理 ROM 限制未烧录 IMS 协议栈，因此无法解码电信短信信令。**如需使用电信卡，请务必选购合宙 Air780EPV 开发板。**
+> **⚠️ 为什么电信 4G 短信必须选 Air780EPV 或 Air780EPM？**  
+> 中国电信 4G 网络不支持传统 2G/3G CSFB 回落，所有的短信下发必须通过 **SMS over IMS (VoLTE)** 隧道承载。一代旧款 EC618（Air780E/Air700E）由于芯片物理 ROM 限制未烧录 IMS 协议栈，因此无法解码电信短信信令。**如需使用电信卡，请务必选购合宙 Air780EPV 或 Air780EPM 模组。**
+
+---
+
+### 🛑 开发者必看：四大固件避坑红线 (Defect Prevention)
+
+#### 🔴 红线 1：Air780EPM 绝对不能刷 `109` 固件，必须使用 `103` 标准固件
+- **直接故障表象**：不插卡时看似正常运行；一旦插上 SIM 卡，模组板载 LED 狂闪，电脑 USB 端口疯狂断开重连，Luatools 提示 `[WinError 22] 设备不识别此命令`，串口反复打印：
+  ```text
+  E/main sms_service.lua:110: attempt to index a nil value (global 'sms')
+  E/main Lua VM exit!! reboot in 15000ms
+  ```
+- **技术根因**：合宙原厂官方将 `_109.soc` 定义为“免驱随身 WiFi 专用版”，为给虚拟网卡驱动腾出空间，**在固件底层彻底剔除了 `sms`（短信）C 语言库**，同时将脚本空间压缩至 288KB。网关脚本在收到短信中断时寻址不到 `sms` 对象，瞬间触发 Lua 虚拟机崩溃与硬件看门狗死锁循环！
+- **正解**：必须刷入官方标准版 **`LuatOS-SoC_V2050_Air780EPM_103.soc`**（内置完整 `sms` 驱动，预留 448KB 最大脚本存储空间）。
+
+#### 🔴 红线 2：严禁芯片跨代混刷（EC618 与 EC718P 物理隔离）
+- 一代 **EC618（Air780E/Air780EC）** 对应 **`V11xx`** 固件（如 `V1124`）；
+- 二代 **EC718（Air780EPM/Air780EPV）** 对应 **`V20xx`** 固件（如 `V2050`、`V2001`）。
+- **后果**：跨代混刷芯片引导地址与 Flash 分区校验完全不通，会导致模组无法开机黑屏。
+
+#### 🔴 红线 3：Air780EPM 不能错刷 Air780EPV 固件
+- 虽然都属于二代 718 架构，但 `EPV` 固件中强制编译了独立音频编解码芯片（Codec）硬件驱动。`EPM` 模组上没有这颗音频芯片，错刷会导致开机外设寻址挂起死锁。
+
+#### 🔴 红线 4：一代 EC618 开发板插电不自启与改线方法
+- 一代 EC618 开发板（如 `EVB_Air780X_V1.5`）出厂默认机制为通电待机关机。刷完固件后插入电脑若无反应，**需长按板载 S2 (POW) 键 2 秒开机**；如需做成随身网关插电自启，将板上 `S2` 按键两脚焊锡短接或焊接 `R6` 跳线接地即可。
 
 ### 2. 存储空间 (Flash) 要求与分区账本
 - **模组内置 Flash**：要求模组内置 Flash ≥ **4MB**（合宙 780 系列全系内置 4MB Nor Flash，开箱完全满足）；
@@ -101,10 +167,11 @@
   - 传统开源脚本在被上位机或浏览器请求时，往往一次性全量 dump 所有短信，瞬时内存飙升直接引发 MCU 堆耗尽（OOM）看门狗重启；
   - 本网关固件独家采用 **`h:gen:offset` 游标分页技术**，单批严格限制 15 条且正文截断至 256 字节，**执行查询拉取时动态内存增量严格压制在 12KB 以内**，即使连续高频恶意刷新也能稳健在安全水位线内运行。
 
-### 4. 固件底包 (SOC 镜像) 版本要求
-- **Air780EPV** 模组必须配合 `LuatOS-SoC_V2001_EC718PV_CLOUD.soc` 及以上版本使用（集成 VoLTE / IMS 协议栈）；
-- **Air780E / Air700E** 模组必须配合 `LuatOS-SoC_V1113_EC618.soc` 及以上版本使用；
-- **注意**：底包必须使用官方精简底包（CLOUD 版），切勿烧录带有复杂 UI / 字体库的未精简全功能底包，以确保留出足够系统堆内存给网络协议栈。
+### 4. 固件底包 (SOC 镜像) 版本与选型要求
+- **Air780EPV 模组**：必须配合 `LuatOS-SoC_V2001_EC718PV_CLOUD.soc` 使用（集成 VoLTE / IMS 协议栈与音频编解码 Codec 驱动）；
+- **Air780EPM 模组**：必须配合 **`LuatOS-SoC_V2050_Air780EPM_103.soc`** 使用（内置完整 `sms` 短信驱动库，预留 448KB 最大脚本空间；⚠️ 绝不可使用 109 随身WiFi剪裁版）；
+- **Air780E / Air780EC / Air700E 模组**：必须配合 `LuatOS-SoC_V1124_EC618.soc`（或 V1113 标准版）使用；
+- **注意**：底包必须使用官方精简底包（CLOUD / 标准版），切勿烧录带有复杂 UI / 字体库的未精简底包，以确保留出足够系统堆内存给网络协议栈。
 
 ---
 
@@ -159,18 +226,25 @@
 ---
 
 <a id="firmware-download"></a>
-## 💾 固件获取与免按键烧录指南
+## 💾 固件获取与一键烧录指南
 
 ### 1. 固件底包与源码文件说明
 本项目代码仓库已自包含完整开源的固件与逻辑脚本，开箱即用，无需到处翻找：
 - **官方 SOC 底包 (`deploy/core/`)**：
   - `LuatOS-SoC_V2001_EC718PV_CLOUD.soc`：针对 **Air780EPV** 模组深度定制优化的官方精简底层固件（集成 VoLTE / IMS / HTTP / FSKV 驱动）；
-  - `LuatOS-SoC_V1113_EC618.soc`：针对 Air780E / Air700E 模组的官方精简底包；
+  - `LuatOS-SoC_V2050_Air780EPM_103.soc`：针对 **Air780EPM** 模组的官方标准底层固件（内置 `sms` 短信驱动与 448KB 脚本空间）；
+  - `LuatOS-SoC_V1124_EC618.soc`：针对 **Air780E / Air780EC / Air700E** 模组的官方最新正式稳定底包；
   - 亦可前往 [合宙官方固件发行站](https://gitee.com/openLuat/LuatOS) 或通过 Luatools 自动在线拉取最新固件。
 - **业务脚本源码 (`deploy/smart-gateway-780epv/`)**：
-  - 包含了开机引导、短信提码、0 话费秒挂、Push ACK 闭环、LittleFS 环形黑匣子存储等全部 Lua 脚本源码。
+  - 最新版本为 **`v1.2.9`**，包含了开机引导、短信提码、0 话费秒挂、Push ACK 闭环、LittleFS 环形黑匣子存储等全部 11 个 Lua 核心脚本。
 
-### 2. 刷机方式 A：2.5 秒全自动免按键烧录（已刷入底包的日常极速更新）
+### 2. 开箱即用：Luatools 预置工程文件 (`tools/Luatools/project/`)
+仓库中已针对三款硬件分别预置了专属的一键工程配置文件，打开 Luatools 直接选中即可烧录，免去手工添加文件的烦恼：
+1. **`Air780EPM智能网关.ini`**：默认绑定 `V2050_103` 官方底包 + 全套网关脚本；
+2. **`smart-gateway-780epv.ini`**：默认绑定 `V2001_EC718PV` 官方底包 + 全套网关脚本；
+3. **`Air780EC智能网关.ini`**：默认绑定 `V1124_EC618` 官方底包 + 全套网关脚本。
+
+### 3. 刷机方式 A：2.5 秒全自动免按键烧录（已刷入底包的日常极速更新）
 适合已刷入过一次底层 SOC 的模组。利用配套的自动化脚本一键完成（无需手工按物理 BOOT 键，无需手动点击鼠标）：
 
 #### 📋 必须满足的前置条件（请逐项核对）：
@@ -201,17 +275,18 @@ python tools/Luatools/flash_smart_gateway.py
 **底层自动化过程**：
 脚本通过 Win32 API 自动定位 Luatools 窗体句柄并模拟投递 `BM_CLICK` 点击“仅下载脚本”，模组收到 `BOOT_CP` 软复位指令后 2.5 秒内自动从运行态重启切入 ROM Bootloader（COM9）并高速灌入最新 Lua 脚本，烧录完毕模组自动重启上线！
 
-### 3. 刷机方式 B：全新出厂模组首次全量初始化（底层 Core + 脚本）
-**⚠️ 关键注意**：若您拿到的是全新出厂未烧录过的 Air780EPV 板卡（通常带原厂出厂 AT 固件），模组内尚未植入 LuatOS 底层，无法响应纯脚本更新指令。**首次使用请务必按以下步骤执行一次全量烧录**：
+### 4. 刷机方式 B：全新出厂模组首次全量初始化（底层 Core + 脚本）
+**⚠️ 关键注意**：若您拿到的是全新出厂未烧录过的板卡（通常带原厂出厂 AT 固件），模组内尚未植入 LuatOS 底层，无法响应纯脚本更新指令。**首次使用请务必按以下步骤执行一次全量烧录**：
 1. 从 [合宙官方文档中心](https://docs.openluat.com/common/Luatools/) 或 [官方 CDN 直链下载](https://cdn18.luatos.com/files/exe/Luatools_v3.exe) 获取免安装烧录工具 **Luatools_v3**；
 2. 打开 Luatools，点击主界面右上角 **【项目管理测试】**；
-3. 新建一个项目（例如命名为 `Air780EPV网关`）；
-4. 在右侧 **【底层 Core】** 处点击浏览，选择本项目内置的官方底包：
-   - Air780EPV 选择：`deploy/core/LuatOS-SoC_V2001_EC718PV_CLOUD.soc`
-   - Air780E/700E 选择：`deploy/core/LuatOS-SoC_V1113_EC618.soc`
-5. 在 **【脚本文件】** 处点击添加，选中本项目 `deploy/smart-gateway-780epv/` 目录下的所有 `.lua` 文件；
-6. 勾选 **【全量烧录】**；
-7. 将开发板连上 USB，长按开机键开机，点击界面的 **【下载底层和脚本】** 即可完成基座注入；
+3. **直接选中**本项目在 `tools/Luatools/project/` 中为您预置的工程（如 `Air780EPM智能网关.ini`、`smart-gateway-780epv.ini` 或 `Air780EC智能网关.ini`），或手工新建工程；
+4. 若手工新建，在右侧 **【底层 Core】** 处精准选择本项目内置的官方底包：
+   - **Air780EPV 选择**：`deploy/core/LuatOS-SoC_V2001_EC718PV_CLOUD.soc`
+   - **Air780EPM 选择**：`deploy/core/LuatOS-SoC_V2050_Air780EPM_103.soc`（⚠️ **严禁选 109**）
+   - **Air780E / Air780EC 选择**：`deploy/core/LuatOS-SoC_V1124_EC618.soc`
+5. 在 **【脚本文件】** 处点击添加，选中本项目 `deploy/smart-gateway-780epv/` 目录下的全部 11 个 `.lua` 脚本；
+6. 勾选 **【添加底层和提示下载】**；
+7. 将模组插上 USB（若未自动进入，按住板上的 `BOOT` 键再插电脑），点击界面右下角的 **【下载底层和脚本】** 即可完成基座注入；
 8. 首次全量初始化完成后，后续任何业务更新便可永久使用【刷机方式 A】实现 2.5 秒全自动免交互秒刷！
 
 ---
@@ -224,7 +299,7 @@ python tools/Luatools/flash_smart_gateway.py
 
 | 操作系统环境 | 兼容支持度 | 运行形态与功能特性 | 适用人群与场景 |
 | :--- | :---: | :--- | :--- |
-| **Windows 10 / 11 (64-bit)** | **【官方主推】**<br>⭐⭐⭐⭐⭐ | • **单文件绿色免装版 (`Air780EPV-Gateway.exe`)**<br>• 内置 Python 运行时，双击即用<br>• 原生系统托盘天线图标常驻<br>• 自动调起独立 Edge/Chrome 原生 App 窗口<br>• 动态验证码自动直写 Windows 系统剪贴板 | 日常个人电脑、随身办公本、桌面主力机 |
+| **Windows 10 / 11 (64-bit)** | **【官方主推】**<br>⭐⭐⭐⭐⭐ | • **单文件绿色免装版 (`Air780EPV-Gateway.exe`，约 55MB)**<br>• 内置 Python 3.12 运行时与所有依赖，双击即用<br>• 自动识别并热插拔接管多卡槽 4G 模组集群<br>• 自动调起独立 Web 原生 App 视窗 (`http://127.0.0.1:17801`)<br>• 动态验证码自动 0.1 秒直写 Windows 系统剪贴板 | 日常个人电脑、随身办公本、桌面主力机 |
 | **Linux 发行版**<br>*(Ubuntu / Debian / CentOS / 飞牛 fnOS / 群晖 DSM)* | **完全兼容**<br>⭐⭐⭐⭐⭐ | • 通过 Python 3.8+ 源码运行<br>• 提供 17800 (Hub) 与 17801 (Web) 网络服务<br>• 支持 systemd 守护进程常驻<br>• 完美适配 NAS、家用服务器 24 小时不断电短信转发 | 家用 NAS (飞牛/群晖)、工控主机、软路由、树莓派 |
 | **macOS**<br>*(x86_64 / Apple Silicon)* | **完全兼容**<br>⭐⭐⭐⭐ | • 通过 Python 3.8+ 源码运行<br>• 自动枚举 USB 虚拟串口并开启本地管理看板 | Mac 开发者本地二次开发与测试 |
 | **现代浏览器支持** | **完全兼容** | • 基于现代标准构建：Chrome 90+, Edge 90+, Safari 14+, Firefox 88+<br>• 支持 SSE (Server-Sent Events) 实时推流、CSS Grid 与响应式触底懒加载 | PC 桌面浏览器、手机移动端网页查阅 |
@@ -384,12 +459,16 @@ Air780EPV-Smart-Gateway/
 ## 🚀 快速上手与运行指引
 
 ### 方式一：直接运行 Windows 免安装单文件版（推荐普通用户）
-适合日常作为随身短信棒使用，零 Python 运行环境依赖：
-1. 前往 GitHub **[Releases 页面](https://github.com/ocean1798/Air780EPV-Smart-Gateway/releases)** 下载最新的 `Air780EPV-Gateway-v1.2.5.zip`；
-2. 解压后双击运行 **`Air780EPV-Gateway.exe`**；
-3. 程序自动在后台常驻运行，系统托盘出现天线图标，并自动调起 Edge 原生独立 App 窗口：
-   - 本地 Web 控制台：`http://127.0.0.1:17801`
-   - 底层通信中枢：`127.0.0.1:17800`
+适合日常作为随身通信网关使用，零 Python 运行环境门槛：
+1. **直接获取程序**：
+   - 本地仓库直接运行：`tools/host_gateway/dist/Air780EPV-Gateway.exe`
+   - 或从 GitHub **[Releases 页面](https://github.com/ocean1798/Air780EPV-Smart-Gateway/releases)** 下载最新版；
+2. **双击运行**：
+   双击 `Air780EPV-Gateway.exe`，程序自动在后台静默运行并常驻系统托盘，同时自动打开 Web 管理视窗：
+   - 本地 Web 可视化控制台：`http://127.0.0.1:17801`
+   - 底层通信 Hub 服务：`127.0.0.1:17800`
+3. **即插即用**：
+   插上任意数量的已刷机 4G 模组（Air780EPV、Air780EPM、Air780E/EC），程序自动探测并点亮卡槽看板，收到验证码 0.1 秒直写系统剪贴板。
 
 ### 方式二：从 Python 源码启动（开发者 / Linux / NAS 用户）
 ```bash
@@ -408,7 +487,8 @@ python gateway_app.py
 ```
 
 ### 方式三：模组固件烧录与极速更新
-- **若拿到全新出厂未烧录的 Air780EPV 板卡**：请参考上文【刷机方式 B】，通过 Luatools 完成首次全量烧录（底层 Core + 脚本）；
+- **全新模组首次全量注入（底层 Core + 脚本）**：
+  打开 Luatools，在左侧直接打开仓库预置的专属工程（`Air780EPM智能网关.ini`、`smart-gateway-780epv.ini` 或 `Air780EC智能网关.ini`），按住板载 `BOOT` 键插入 USB，点击【下载底层和脚本】一键完成初始化；
 - **已刷入底包的日常业务极速更新**：
   在项目根目录下直接运行全自动免按键脚本（2.5 秒全自动免人工下载与复位）：
   ```bash
