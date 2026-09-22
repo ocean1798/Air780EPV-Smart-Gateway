@@ -1,29 +1,29 @@
-# 🔔 多渠道即时推送配置指南 (Push Channels)
+# 🔔 手机推送配置教程 (飞书 / 微信 / 钉钉 / Bark)
 
-本项目支持在收到短信、验证码或来电拦截事件时，通过上位机自动借用本地宽带（不耗费板卡 4G 蜂窝流量）向多个协同平台推送富文本通知。
-
----
-
-## 1. 支持的推送渠道全景
-
-| 推送渠道 | 消息形态 | 渠道特性与核心亮点 | 配置所需参数 |
-| :--- | :--- | :--- | :--- |
-| **飞书机器人 (Feishu / Lark)** | **富文本互动卡片**<br>(Interactive Card) | • 动态突出显示高亮验证码<br>• 内置一键复制验证码 Action 按钮<br>• 展示发件人、时间、模组电量与 4G 信号 | `feishu.url`: 飞书群自定义机器人的完整 Webhook 地址 |
-| **钉钉机器人 (DingTalk)** | **Markdown 卡片消息** | • 格式排版清晰整洁<br>• 支持 PC 端与移动端即刻提醒与免打扰设置 | `dingtalk.url`: 钉钉群机器人的 Webhook 地址 |
-| **企业微信机器人 (WeCom)** | **Markdown / 文本消息** | • 无缝融入工作群组与移动办公<br>• 毫秒级到达率与多端同步推送 | `wecom.url`: 企业微信内部群机器人的 Webhook 地址 |
-| **Bark (iOS)** | **原生极速通知** | • iOS 端最优体验，极简纯净<br>• 支持通知铃声、角标、分组管理<br>• 点击通知自动将动态验证码复制到 iPhone 剪贴板 | `bark.url`: 形如 `https://api.day.app/YOUR_KEY/` 的推送地址 |
-| **自定义通用 Webhook** | **HTTP POST JSON** | • 支持对接任意自建服务、Home Assistant、Server酱、PushPlus、Telegram Bot 等<br>• 携带结构化 JSON 数据载荷 | `webhook.url`: 目标接收端 API 的 HTTP/HTTPS 地址 |
+收到短信或验证码时，电脑软件会自动借用电脑自身的宽带网络（**不消耗模块里的手机卡流量**），将短信转发推送到你的手机或办公软件上。
 
 ---
 
-## 2. 配置文件位置与启用方式
+## 1. 支持哪些推送平台？
 
-上位机配置文件路径为：
+| 推送工具 | 推送效果 | 怎么用？ |
+| :--- | :--- | :--- |
+| **飞书机器人** | **交互卡片（最推荐）** | 短信排版最漂亮，验证码会大字高亮显示，并自带【一键复制】按钮。 |
+| **企业微信机器人** | **工作群消息** | 直接推送到企业微信内部群，适合移动办公接收。 |
+| **钉钉机器人** | **群消息卡片** | 格式整洁，支持在群内提醒。 |
+| **Bark (苹果手机)** | **iPhone 原生系统通知** | 体验最干净。收到通知点击横幅，**验证码会自动复制到 iPhone 剪贴板**。 |
+| **自定义 Webhook** | **标准 JSON 数据** | 适合发给自己的服务器、Home Assistant 或各类自建通知系统。 |
+
+---
+
+## 2. 怎么配置？
+
+配置文件在：
 `tools/host_gateway/gateway_config.json`
 
-*(如果文件不存在，可直接复制同目录下的 `gateway_config.example.json` 并重命名)*。
+*(如果还没有这个文件，复制一份同目录下的 `gateway_config.example.json` 并重命名为 `gateway_config.json` 即可)*。
 
-您可以在配置文件中同时启用多个推送渠道（支持多渠道并发推送）：
+想开哪个就把对应项的 `enable` 改成 `1`，把 Webhook 链接填进去即可（支持同时开多个）：
 
 ```json
 {
@@ -32,61 +32,57 @@
   },
   "feishu": {
     "enable": 1,
-    "url": "https://open.feishu.cn/open-apis/bot/v2/hook/YOUR_FEISHU_BOT_TOKEN",
+    "url": "https://open.feishu.cn/open-apis/bot/v2/hook/填入你的飞书机器人Token",
     "secret": ""
   },
   "wecom": {
     "enable": 0,
-    "url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=YOUR_KEY"
+    "url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=填入企业微信Key"
   },
   "dingtalk": {
     "enable": 0,
-    "url": "https://oapi.dingtalk.com/robot/send?access_token=YOUR_TOKEN",
+    "url": "https://oapi.dingtalk.com/robot/send?access_token=填入钉钉Token",
     "secret": ""
   },
   "bark": {
     "enable": 0,
-    "url": "https://api.day.app/YOUR_BARK_KEY/",
-    "group": "Air780EPV",
+    "url": "https://api.day.app/填入你的BarkKey/",
+    "group": "Air780",
     "sound": "minuet"
   },
   "webhook": {
     "enable": 0,
-    "url": "http://127.0.0.1:8123/api/webhook/YOUR_HA_WEBHOOK_ID",
-    "method": "POST",
-    "headers": {
-      "Content-Type": "application/json"
-    }
+    "url": "http://127.0.0.1:8123/api/webhook/填入HA接收地址",
+    "method": "POST"
   }
 }
 ```
 
 ---
 
-## 3. 各渠道具体配置步骤
+## 3. 各平台详细设置方法
 
-### 3.1 飞书群自定义机器人
-1. 在飞书群聊中点击右上角 **群设置 ➔ 机器人 ➔ 添加机器人 ➔ 自定义机器人**；
-2. 机器人名称填写 `4G通信网关`，复制生成的 **Webhook 地址**；
-3. 将地址填入 `gateway_config.json` 的 `feishu.url` 中，并将 `feishu.enable` 设为 `1`；
-4. 收到短信时，飞书将自动渲染出包含发件人、运营商、验证码高亮大字与复制按钮的高保真交互卡片。
+### 3.1 飞书群机器人
+1. 打开飞书群聊，点击右上角 **群设置 ➔ 机器人 ➔ 添加机器人 ➔ 自定义机器人**；
+2. 机器人名字写 `短信网关`，复制生成的 **Webhook 地址**；
+3. 填进 `gateway_config.json` 的 `feishu.url`，并将 `feishu.enable` 改为 `1`，重启软件即可。
 
-### 3.2 企业微信机器人
-1. 在企业微信群聊中右键添加群机器人；
-2. 复制生成的 Webhook 地址，填入 `wecom.url`，并将 `wecom.enable` 设为 `1`。
+### 3.2 企业微信群机器人
+1. 在企业微信群聊里右键点击，选择 **添加群机器人**；
+2. 复制生成的 Webhook 地址，填入 `wecom.url`，并将 `wecom.enable` 改为 `1`。
 
-### 3.3 钉钉群自定义机器人
-1. 在钉钉群设置中添加“自定义机器人”，安全设置建议选择“自定义关键词”，关键词填入 `验证码` 或 `短信`；
-2. 复制 Webhook 地址填入 `dingtalk.url`，并将 `dingtalk.enable` 设为 `1`。
+### 3.3 钉钉群机器人
+1. 在钉钉群设置中添加“自定义机器人”；
+2. 安全设置选“自定义关键词”，关键词填入 `验证码` 或 `短信`；
+3. 复制 Webhook 地址填入 `dingtalk.url`，并将 `dingtalk.enable` 改为 `1`。
 
-### 3.4 Bark (iOS 专用极速推送)
-1. 在 iPhone 的 App Store 下载 **Bark** App；
-2. 打开 Bark 复制你的专有 Key，拼接为 `https://api.day.app/你的Key/`；
-3. 填入 `bark.url`，并将 `bark.enable` 设为 `1`；
-4. 当短信包含验证码时，Bark 会将验证码作为跳转参数下发，点击推送横幅即可瞬间将验证码复制到手机剪贴板。
+### 3.4 Bark (苹果 iPhone 专属)
+1. 在 iPhone 的 App Store 搜 **Bark** 下载安装；
+2. 打开软件复制主界面的专属链接（形如 `https://api.day.app/你的Key/`）；
+3. 填入 `bark.url`，并将 `bark.enable` 改为 `1`。收到带验证码的短信时，点一下通知横幅就会自动存进手机剪贴板。
 
-### 3.5 自定义通用 Webhook (对接 Home Assistant / 自建服务)
-当设置 `webhook.enable = 1` 时，上位机会向指定的 URL 发送标准 HTTP POST 请求，JSON 负载格式如下：
+### 3.5 自定义 Webhook (对接自建系统 / 智能家居)
+开启 `webhook.enable = 1` 后，每收到一条短信，软件就会以标准 HTTP POST 往你的接口推一条 JSON 数据：
 ```json
 {
   "event": "sms_received",
@@ -96,18 +92,12 @@
   "time": 1726700000,
   "slot_id": "slot_1",
   "model": "Air780EPM",
-  "imei": "868926082396117",
   "csq": 26
 }
 ```
-可直接在 Home Assistant 的自动化中利用 Webhook Trigger 实现智能家居联动（例如：收到某快递短信时联动播报或亮灯）。
 
 ---
 
-## 4. 0 流量保号防线 (Push ACK 机制)
-当模组插在运行有上位机的电脑上时：
-1. 模组收到短信后，优先通过 USB 虚拟串口向电脑上位机上报；
-2. 电脑上位机借用本地光纤宽带/Wi-Fi 向飞书/微信服务器发送推送；
-3. 上位机推送成功后，立即向模组回送 `PUSH_ACK` 回执；
-4. 模组收到回执，确认宽带已成功代推，**自身无需激活 4G 蜂窝数据**，保持 0 流量待机；
-5. 若板卡脱机插在充电头上，可按需在 Web 控制台启用板端数据通信进行独立推送。
+## 4. 为什么插电脑不会耗费手机卡流量？
+模块收到短信后，会优先把短信交给电脑；电脑上的软件直接走家里的宽带或者 Wi-Fi 推送到飞书/微信。  
+推成功后电脑会告诉模块“已搞定”，模块自身就不会开 4G 数据上网，从而实现 **0 流量消耗**。只有拔下模块插在普通充电头上且需要脱机推送时，才需要在后台开启模块自身的 4G 流量。
